@@ -42,17 +42,27 @@ Open the printed URL, sign in, and allow Drive access. The app creates the **Exc
 
 ## GitHub Pages
 
-1. Your site URL is like `https://YOURNAME.github.io/REPO/`.
-2. Before `npm run build` or `npm run deploy`, set Vite’s base path so asset URLs resolve (one-shot in the shell, no `.env` required):
+Your site URL for a project repo is `https://YOURNAME.github.io/REPO/`. Add **Authorized JavaScript origins** in Google Cloud (e.g. `https://YOURNAME.github.io` — no path).
+
+### Option A — GitHub Actions (recommended)
+
+1. Repo → **Settings** → **Pages** → **Build and deployment** → **Source**: **GitHub Actions** (not “Deploy from a branch”).
+2. Push to `main`: the workflow [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml) runs `npm ci`, builds with `VITE_BASE_PATH=/REPO/` (`REPO` = repository name), and deploys the `dist` artifact.
+
+You can also run the workflow manually: **Actions** → **Deploy Pages** → **Run workflow**.
+
+### Option B — `gh-pages` branch from your machine
+
+1. Before `npm run build` or `npm run deploy`, set Vite’s base path:
 
    ```bash
    export VITE_BASE_PATH=/REPO/
    npm run deploy
    ```
 
-   Use your real repo name with leading and trailing slashes. Add the same **Authorized JavaScript origins** in Google Cloud (e.g. `https://YOURNAME.github.io`).
+   Use your real repo name with leading and trailing slashes.
 
-3. `npm run deploy` runs `vite build` then publishes `dist` to the `gh-pages` branch. In repo settings → Pages → deploy from branch `gh-pages` / root.
+2. `npm run deploy` runs `vite build` then publishes `dist` to the `gh-pages` branch. In **Settings** → **Pages** → deploy from branch **`gh-pages`** / **root** (not Actions).
 
 ## Features (Phase 1)
 
