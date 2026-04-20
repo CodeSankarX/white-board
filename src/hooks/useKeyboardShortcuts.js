@@ -66,6 +66,12 @@ export function useKeyboardShortcuts(getState, actions) {
       }
 
       if (e.key === "Escape" && s.fileManagerOpen) {
+        if (
+          typeof document !== "undefined" &&
+          document.querySelector(".text-input-modal-overlay")
+        ) {
+          return;
+        }
         e.preventDefault();
         a.onCloseFileManager();
         return;

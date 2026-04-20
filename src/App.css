@@ -758,6 +758,98 @@ a.file-manager__drive-link {
   justify-content: center;
 }
 
+/* ——— Text input modal (rename / new diagram; same chrome as file manager) ——— */
+.text-input-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 46;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(12, 10, 9, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.text-input-modal {
+  width: min(100%, 440px);
+  background: var(--gc-surface);
+  border-radius: var(--gc-radius);
+  padding: 1.25rem 1.35rem;
+  border: 1px solid var(--gc-border);
+  box-shadow: var(--gc-shadow-lg);
+}
+
+.text-input-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--gc-border);
+}
+
+.text-input-modal__title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--gc-bg);
+}
+
+.text-input-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.text-input-modal__label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--gc-text-soft);
+}
+
+.text-input-modal__input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--gc-border-strong);
+  border-radius: var(--gc-radius-sm);
+  background: #fff;
+  color: var(--gc-text);
+}
+
+.text-input-modal__input:hover {
+  border-color: var(--gc-border);
+}
+
+.text-input-modal__input:focus {
+  outline: none;
+  border-color: var(--gc-accent);
+  box-shadow: 0 0 0 2px var(--gc-accent-soft);
+}
+
+.text-input-modal__helper {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--gc-text-muted);
+}
+
+.text-input-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--gc-border);
+}
+
 /* ——— Shortcuts help ——— */
 .shortcuts-help-overlay {
   position: fixed;

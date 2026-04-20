@@ -19,6 +19,7 @@ import {
 } from "./driveService.js";
 import { FileManager } from "./components/FileManager.jsx";
 import { ShortcutsHelp } from "./components/ShortcutsHelp.jsx";
+import { TextInputModal } from "./components/TextInputModal.jsx";
 import { Toolbar } from "./components/Toolbar.jsx";
 import { VersionHistory } from "./components/VersionHistory.jsx";
 import { useAutoSave } from "./hooks/useAutoSave.js";
@@ -64,6 +65,8 @@ export default function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
   const [sceneEpoch, setSceneEpoch] = useState(0);
+  const [renameCurrentOpen, setRenameCurrentOpen] = useState(false);
+  const [newDiagramOpen, setNewDiagramOpen] = useState(false);
   const [toast, setToast] = useState(null);
 
   const getSerialized = useCallback(() => {
@@ -282,40 +285,48 @@ export default function App() {
 
   const handleNewDiagram = useCallback(async () => {
     if (!folderId) return;
-    try {
-      if (
-        isDirty() &&
-        !window.confirm("Discard unsaved changes and create a new diagram?")
-      ) {
+    if (
+      isDirty() &&
+      !window.confirm("Discard unsaved changes and create a new diagram?")
+    ) {
+      return;
+    }
+    setNewDiagramOpen(true);
+  }, [folderId, isDirty]);
+
+  const applyNewDiagram = useCallback(
+    async (nameRaw) => {
+      if (!folderId) return;
+      const trimmed = nameRaw.trim();
+      if (!trimmed) {
+        setNewDiagramOpen(false);
         return;
       }
-      const suggested = "Untitled";
-      const name = window.prompt("New diagram name", suggested);
-      if (!name?.trim()) return;
-      const empty = emptySerialized();
-      const fileMeta = await createTextFile(
-        folderId,
-        `${name.trim()}.excalidraw`,
-        empty,
-      );
-      const data = restore(
-        JSON.parse(empty),
-        null,
-        null,
-        { repairBindings: true },
-      );
-      setActiveFile({ id: fileMeta.id, name: fileMeta.name });
-      setInitialScene({
-        elements: data.elements,
-        appState: data.appState,
-        files: data.files,
-      });
-      lastSavedSerializedRef.current = empty.trim();
-    } catch (e) {
-      console.error(e);
-      showToast(e?.message || "Could not create file");
-    }
-  }, [folderId, isDirty, showToast]);
+      try {
+        const empty = emptySerialized();
+        const fileMeta = await createTextFile(folderId, trimmed, empty);
+        const data = restore(
+          JSON.parse(empty),
+          null,
+          null,
+          { repairBindings: true },
+        );
+        setActiveFile({ id: fileMeta.id, name: fileMeta.name });
+        setInitialScene({
+          elements: data.elements,
+          appState: data.appState,
+          files: data.files,
+        });
+        lastSavedSerializedRef.current = empty.trim();
+        setNewDiagramOpen(false);
+      } catch (e) {
+        console.error(e);
+        showToast(e?.message || "Could not create file");
+        throw e;
+      }
+    },
+    [folderId, showToast],
+  );
 
   const handleManualSave = useCallback(async () => {
     try {
@@ -325,18 +336,31 @@ export default function App() {
     }
   }, [saveNow, showToast]);
 
-  const handleRenameCurrent = useCallback(async () => {
+  const handleRenameCurrent = useCallback(() => {
     if (!activeFile?.id) return;
-    const next = window.prompt("Rename diagram", activeFile.name);
-    if (!next?.trim()) return;
-    try {
-      const name = await renameFile(activeFile.id, next.trim());
-      setActiveFile((prev) => (prev ? { ...prev, name } : prev));
-      showToast(`Renamed to ${name}`);
-    } catch (e) {
-      showToast(e?.message || "Rename failed");
-    }
-  }, [activeFile, showToast]);
+    setRenameCurrentOpen(true);
+  }, [activeFile?.id]);
+
+  const applyRenameCurrent = useCallback(
+    async (next) => {
+      if (!activeFile?.id) return;
+      const trimmed = next.trim();
+      if (!trimmed || trimmed === activeFile.name) {
+        setRenameCurrentOpen(false);
+        return;
+      }
+      try {
+        const name = await renameFile(activeFile.id, trimmed);
+        setActiveFile((prev) => (prev ? { ...prev, name } : prev));
+        showToast(`Renamed to ${name}`);
+        setRenameCurrentOpen(false);
+      } catch (e) {
+        showToast(e?.message || "Rename failed");
+        throw e;
+      }
+    },
+    [activeFile, showToast],
+  );
 
   const handleDuplicateFile = useCallback(
     async (f) => {
@@ -509,6 +533,28 @@ export default function App() {
         fileId={activeFile?.id}
         fileName={activeFile?.name}
         onRestoreRevision={handleRestoreRevision}
+      />
+      <TextInputModal
+        open={renameCurrentOpen}
+        title="Rename diagram"
+        label="File name"
+        initialValue={activeFile?.name ?? ""}
+        confirmLabel="Rename"
+        cancelLabel="Cancel"
+        helperText="Include .excalidraw or it will be added for you."
+        onClose={() => setRenameCurrentOpen(false)}
+        onConfirm={applyRenameCurrent}
+      />
+      <TextInputModal
+        open={newDiagramOpen}
+        title="New diagram"
+        label="File name"
+        initialValue="Untitled"
+        confirmLabel="Create"
+        cancelLabel="Cancel"
+        helperText="Saved as .excalidraw in your Excalidraw Drive folder."
+        onClose={() => setNewDiagramOpen(false)}
+        onConfirm={applyNewDiagram}
       />
       <div className="app-toast" hidden={!toast} role="alert">
         {toast}

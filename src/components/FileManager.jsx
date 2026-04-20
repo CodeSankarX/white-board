@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiagramPreviewThumb } from "./DiagramPreviewThumb.jsx";
+import { TextInputModal } from "./TextInputModal.jsx";
 import { listExcalidrawFiles, renameFile, trashFile } from "../driveService.js";
 
 function driveFileUrl(fileId) {
@@ -34,6 +35,7 @@ export function FileManager({
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("recent");
+  const [renameTarget, setRenameTarget] = useState(null);
   const searchInputRef = useRef(null);
 
   const refresh = useCallback(async () => {
@@ -262,16 +264,7 @@ export function FileManager({
                     <button
                       type="button"
                       className="btn btn--sm btn--ghost"
-                      onClick={async () => {
-                        const next = window.prompt("Rename to", f.name);
-                        if (!next || next === f.name) return;
-                        try {
-                          await renameFile(f.id, next);
-                          await refresh();
-                        } catch (err) {
-                          window.alert(err?.message || String(err));
-                        }
-                      }}
+                      onClick={() => setRenameTarget({ id: f.id, name: f.name })}
                       aria-label={`Rename ${f.name}`}
                     >
                       Rename
@@ -319,6 +312,32 @@ export function FileManager({
           <p className="file-manager__empty">No diagrams yet.</p>
         )}
       </div>
+      <TextInputModal
+        open={Boolean(renameTarget)}
+        title="Rename diagram"
+        label="File name"
+        initialValue={renameTarget?.name ?? ""}
+        confirmLabel="Rename"
+        cancelLabel="Cancel"
+        helperText="Include .excalidraw or it will be added for you."
+        onClose={() => setRenameTarget(null)}
+        onConfirm={async (next) => {
+          if (!renameTarget) return;
+          const trimmed = next.trim();
+          if (!trimmed || trimmed === renameTarget.name) {
+            setRenameTarget(null);
+            return;
+          }
+          try {
+            await renameFile(renameTarget.id, trimmed);
+            await refresh();
+            setRenameTarget(null);
+          } catch (err) {
+            window.alert(err?.message || String(err));
+            throw err;
+          }
+        }}
+      />
     </div>
   );
 }
