@@ -31,6 +31,7 @@ import {
   renameFile,
   saveDiagramSnapshotAfterJsonSave,
   setDriveAccessToken,
+  trashAllDiagramSnapshots,
   updateFileContent,
 } from "./driveService.js";
 import { FileManager } from "./components/FileManager.jsx";
@@ -651,13 +652,30 @@ export default function App() {
           files: data.files,
         });
         setSceneEpoch((e) => e + 1);
-        showToast("Restored a version from Drive history");
+        let snapshotMsg = "";
+        if (folderId) {
+          try {
+            const { deleted } = await trashAllDiagramSnapshots(
+              folderId,
+              activeFile.id,
+            );
+            if (deleted > 0) {
+              snapshotMsg = ` Removed ${deleted} save preview image${deleted === 1 ? "" : "s"}.`;
+            }
+          } catch {
+            snapshotMsg =
+              " Could not remove old save preview images from Drive.";
+          }
+        }
+        showToast(
+          `Restored a version from Drive history.${snapshotMsg}`,
+        );
       } catch (e) {
         showToast(e?.message || "Could not restore version");
         throw e;
       }
     },
-    [activeFile?.id, isDirty, showToast],
+    [activeFile?.id, folderId, isDirty, showToast],
   );
 
   useKeyboardShortcuts(

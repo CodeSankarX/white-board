@@ -632,6 +632,45 @@ export async function listDiagramSnapshots(excalidrawFolderId, sourceFileId) {
   });
 }
 
+/**
+ * Resolve the snapshots subfolder id without creating it (for delete-only flows).
+ * @param {string} excalidrawFolderId
+ * @returns {Promise<string|null>}
+ */
+async function getSnapshotsFolderIdIfExists(excalidrawFolderId) {
+  const cached = snapshotsFolderIdByParent.get(excalidrawFolderId);
+  if (cached) return cached;
+  const q = `'${excalidrawFolderId}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder' and name='${SNAPSHOTS_FOLDER_NAME}'`;
+  const list = await window.gapi.client.drive.files.list({
+    q,
+    fields: "files(id)",
+    pageSize: 5,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  const hit = list.result.files?.[0]?.id;
+  if (hit) snapshotsFolderIdByParent.set(excalidrawFolderId, hit);
+  return hit ?? null;
+}
+
+/**
+ * Move every PNG snapshot for this diagram to Drive trash (e.g. after restoring an older revision).
+ * Snapshots live in the "Gcalidraw save images" subfolder of the Excalidraw Drive folder.
+ * @returns {Promise<{ deleted: number }>}
+ */
+export async function trashAllDiagramSnapshots(excalidrawFolderId, sourceFileId) {
+  return with401Clear(async () => {
+    const snapFolderId = await getSnapshotsFolderIdIfExists(excalidrawFolderId);
+    if (!snapFolderId) return { deleted: 0 };
+    const raw = await listAllSnapshotFolderFiles(snapFolderId);
+    const matches = raw.filter((f) => isSnapshotForSource(f, sourceFileId));
+    for (const f of matches) {
+      await trashFile(f.id);
+    }
+    return { deleted: matches.length };
+  });
+}
+
 async function listSnapshotFilesOldestFirst(snapFolderId, sourceFileId) {
   const raw = await listAllSnapshotFolderFiles(snapFolderId);
   const filtered = raw.filter((f) => isSnapshotForSource(f, sourceFileId));
