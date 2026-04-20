@@ -68,7 +68,8 @@ export function useKeyboardShortcuts(getState, actions) {
       if (e.key === "Escape" && s.fileManagerOpen) {
         if (
           typeof document !== "undefined" &&
-          document.querySelector(".text-input-modal-overlay")
+          (document.querySelector(".text-input-modal-overlay") ||
+            document.querySelector(".share-dialog-overlay"))
         ) {
           return;
         }

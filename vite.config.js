@@ -46,6 +46,9 @@ function productionCspPlugin() {
       "https://accounts.google.com",
       "https://content.googleapis.com",
       "https://apis.google.com",
+      "https://api.allorigins.win",
+      "https://api.codetabs.com",
+      "https://corsproxy.io",
     ].join(" "),
     ["worker-src", "'self'", "blob:"].join(" "),
     [

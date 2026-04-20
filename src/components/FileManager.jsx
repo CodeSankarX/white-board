@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiagramPreviewThumb } from "./DiagramPreviewThumb.jsx";
 import { TextInputModal } from "./TextInputModal.jsx";
-import { listExcalidrawFiles, renameFile, trashFile } from "../driveService.js";
-
-function driveFileUrl(fileId) {
-  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`;
-}
+import {
+  getDriveFileViewUrl,
+  listExcalidrawFiles,
+  renameFile,
+  trashFile,
+} from "../driveService.js";
 
 function formatModified(iso) {
   if (!iso) return "";
@@ -28,6 +29,7 @@ export function FileManager({
   activeFileId,
   onOpenFile,
   onDuplicateFile,
+  onShareFile,
   focusSearchNonce = 0,
 }) {
   const [files, setFiles] = useState([]);
@@ -254,13 +256,23 @@ export function FileManager({
                     ) : null}
                     <a
                       className="btn btn--sm btn--ghost file-manager__drive-link"
-                      href={driveFileUrl(f.id)}
+                      href={getDriveFileViewUrl(f.id)}
                       target="_blank"
                       rel="noopener noreferrer"
                       aria-label={`Open ${f.name} in Google Drive`}
                     >
                       Drive
                     </a>
+                    {onShareFile ? (
+                      <button
+                        type="button"
+                        className="btn btn--sm btn--ghost"
+                        onClick={() => onShareFile(f)}
+                        aria-label={`Share ${f.name}`}
+                      >
+                        Share
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="btn btn--sm btn--ghost"

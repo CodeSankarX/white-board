@@ -182,6 +182,165 @@ export async function downloadFileText(fileId) {
   });
 }
 
+function looksLikeDownloadInterstitialHtml(text) {
+  const t = text.trimStart();
+  if (!t.startsWith("<!") && !t.startsWith("<html")) return false;
+  return (
+    /virus scan warning/i.test(t) ||
+    /Google Drive - /i.test(t) ||
+    /download anyway/i.test(t) ||
+    /confirm=/i.test(t)
+  );
+}
+
+const RELAY_FETCH_MS = 28_000;
+
+/**
+ * Fetch a public URL through CORS relays (browser cannot read drive.google.com
+ * download responses directly). Tries several services — ad blockers often
+ * block one of them.
+ */
+async function fetchThroughRelays(targetUrl) {
+  const encUrl = encodeURIComponent(targetUrl);
+  const withTimeout = async (label, url) => {
+    const ac = new AbortController();
+    const tid = window.setTimeout(() => ac.abort(), RELAY_FETCH_MS);
+    try {
+      const res = await fetch(url, { signal: ac.signal });
+      if (!res.ok) {
+        throw new Error(`${label}: HTTP ${res.status}`);
+      }
+      return await res.text();
+    } finally {
+      window.clearTimeout(tid);
+    }
+  };
+
+  const tryAlloriginsGet = async () => {
+    const ac = new AbortController();
+    const tid = window.setTimeout(() => ac.abort(), RELAY_FETCH_MS);
+    try {
+      const res = await fetch(
+        `https://api.allorigins.win/get?url=${encUrl}`,
+        { signal: ac.signal },
+      );
+      if (!res.ok) {
+        throw new Error(`allorigins-json: HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const c = data?.contents;
+      if (c == null) {
+        throw new Error("allorigins-json: empty contents");
+      }
+      return typeof c === "string" ? c : JSON.stringify(c);
+    } finally {
+      window.clearTimeout(tid);
+    }
+  };
+
+  const attempts = [
+    () =>
+      withTimeout(
+        "codetabs",
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+      ),
+    () =>
+      withTimeout(
+        "allorigins-raw",
+        `https://api.allorigins.win/raw?url=${encUrl}`,
+      ),
+    tryAlloriginsGet,
+    () =>
+      withTimeout(
+        "corsproxy",
+        `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
+      ),
+  ];
+
+  const errors = [];
+  for (const run of attempts) {
+    try {
+      return await run();
+    } catch (e) {
+      const name = e?.name === "AbortError" ? "timeout" : "";
+      errors.push(
+        name
+          ? `${name} (${e.message || "aborted"})`
+          : e?.message || String(e),
+      );
+    }
+  }
+  throw new Error(
+    `All relays failed: ${errors.join(" · ")}. Try another network, disable strict blockers, or set VITE_GOOGLE_API_KEY for direct Google access.`,
+  );
+}
+
+/**
+ * Public `.excalidraw` on Drive, **Anyone with the link can view**, no user OAuth.
+ * - With `googleApiKey`: Drive REST `alt=media` (best: private, fast, CSP-friendly).
+ * - Without key: try unauthenticated `alt=media` (usually fails), then Drive’s
+ *   `uc?export=download` flow via a public CORS relay (handles virus-scan HTML).
+ */
+export async function downloadPublicDriveFileText(fileId) {
+  const key = getConfig().googleApiKey?.trim();
+  const idEnc = encodeURIComponent(fileId);
+  const mediaUrl = `https://www.googleapis.com/drive/v3/files/${idEnc}?alt=media`;
+
+  if (key) {
+    const res = await fetch(
+      `${mediaUrl}&key=${encodeURIComponent(key)}`,
+    );
+    if (res.status === 404) {
+      throw new Error("File not found.");
+    }
+    if (res.status === 403 || res.status === 401) {
+      throw new Error(
+        "Access denied for anonymous viewing. Turn on “Anyone with the link can view” in Share, and ensure the API key allows the Drive API from this site’s origin.",
+      );
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || res.statusText || `HTTP ${res.status}`);
+    }
+    return res.text();
+  }
+
+  try {
+    const res = await fetch(mediaUrl);
+    if (res.ok) return res.text();
+  } catch {
+    /* ignore network errors */
+  }
+
+  const ucUrl = (confirmToken) => {
+    let u = `https://drive.google.com/uc?export=download&id=${idEnc}`;
+    if (confirmToken) u += `&confirm=${encodeURIComponent(confirmToken)}`;
+    return u;
+  };
+
+  let text = await fetchThroughRelays(ucUrl());
+  if (looksLikeDownloadInterstitialHtml(text)) {
+    const m = text.match(/confirm=([0-9A-Za-z_-]+)/);
+    let confirm = m?.[1];
+    if (!confirm && /virus scan warning/i.test(text)) {
+      confirm = "t";
+    }
+    if (confirm) {
+      text = await fetchThroughRelays(ucUrl(confirm));
+    }
+  }
+  if (
+    !text.trim() ||
+    looksLikeDownloadInterstitialHtml(text) ||
+    text.trimStart().startsWith("<")
+  ) {
+    throw new Error(
+      "Could not load this diagram. Enable “Anyone with the link can view” on the file, or set VITE_GOOGLE_API_KEY for more reliable anonymous access.",
+    );
+  }
+  return text;
+}
+
 /**
  * Google Drive revision history (each save creates a new revision when enabled for the file).
  * @param {string} fileId
@@ -240,6 +399,79 @@ export async function trashFile(fileId) {
     await window.gapi.client.drive.files.update({
       fileId,
       resource: { trashed: true },
+    });
+  });
+}
+
+/** Web URL to open this file in Google Drive (view / download). */
+export function getDriveFileViewUrl(fileId) {
+  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view?usp=sharing`;
+}
+
+/**
+ * @param {string} fileId
+ * @returns {Promise<Array<{ id: string; type: string; role: string; emailAddress?: string; displayName?: string }>>}
+ */
+export async function listFilePermissions(fileId) {
+  return with401Clear(async () => {
+    const collected = [];
+    let pageToken;
+    do {
+      const res = await window.gapi.client.drive.permissions.list({
+        fileId,
+        pageSize: 100,
+        fields: "nextPageToken, permissions(id, type, role, emailAddress, displayName)",
+        pageToken: pageToken || undefined,
+      });
+      const list = res.result.permissions || [];
+      collected.push(...list);
+      pageToken = res.result.nextPageToken;
+    } while (pageToken);
+    return collected;
+  });
+}
+
+/** Grant a specific Google account read access. Sends a Drive notification email by default. */
+export async function shareFileWithEmail(
+  fileId,
+  emailAddress,
+  { sendNotificationEmail = true } = {},
+) {
+  return with401Clear(async () => {
+    await window.gapi.client.drive.permissions.create({
+      fileId,
+      resource: {
+        type: "user",
+        role: "reader",
+        emailAddress: emailAddress.trim(),
+      },
+      sendNotificationEmail: Boolean(sendNotificationEmail),
+      fields: "id",
+    });
+  });
+}
+
+/** Allow anyone with the link to view the file in Drive (not indexed). */
+export async function enableAnyoneLinkReader(fileId) {
+  return with401Clear(async () => {
+    const res = await window.gapi.client.drive.permissions.create({
+      fileId,
+      resource: {
+        type: "anyone",
+        role: "reader",
+        allowFileDiscovery: false,
+      },
+      fields: "id",
+    });
+    return res.result.id;
+  });
+}
+
+export async function deleteFilePermission(fileId, permissionId) {
+  return with401Clear(async () => {
+    await window.gapi.client.drive.permissions.delete({
+      fileId,
+      permissionId,
     });
   });
 }

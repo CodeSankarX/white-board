@@ -18,6 +18,7 @@ import {
   updateFileContent,
 } from "./driveService.js";
 import { FileManager } from "./components/FileManager.jsx";
+import { ShareDialog } from "./components/ShareDialog.jsx";
 import { ShortcutsHelp } from "./components/ShortcutsHelp.jsx";
 import { TextInputModal } from "./components/TextInputModal.jsx";
 import { Toolbar } from "./components/Toolbar.jsx";
@@ -67,6 +68,7 @@ export default function App() {
   const [sceneEpoch, setSceneEpoch] = useState(0);
   const [renameCurrentOpen, setRenameCurrentOpen] = useState(false);
   const [newDiagramOpen, setNewDiagramOpen] = useState(false);
+  const [shareTarget, setShareTarget] = useState(null);
   const [toast, setToast] = useState(null);
 
   const getSerialized = useCallback(() => {
@@ -466,6 +468,15 @@ export default function App() {
             ? () => setVersionHistoryOpen(true)
             : undefined
         }
+        onShare={
+          signedIn && activeFile?.id
+            ? () =>
+                setShareTarget({
+                  id: activeFile.id,
+                  name: activeFile.name,
+                })
+            : undefined
+        }
         savingDisabled={!signedIn || !activeFile || booting}
       />
       <div className="app-canvas-wrap">
@@ -520,6 +531,9 @@ export default function App() {
         activeFileId={activeFile?.id}
         onOpenFile={handleOpenRemoteFile}
         onDuplicateFile={signedIn ? handleDuplicateFile : undefined}
+        onShareFile={
+          signedIn ? (f) => setShareTarget({ id: f.id, name: f.name }) : undefined
+        }
         focusSearchNonce={fileSearchFocusNonce}
       />
       <ShortcutsHelp
@@ -533,6 +547,13 @@ export default function App() {
         fileId={activeFile?.id}
         fileName={activeFile?.name}
         onRestoreRevision={handleRestoreRevision}
+      />
+      <ShareDialog
+        open={Boolean(shareTarget)}
+        fileId={shareTarget?.id}
+        fileName={shareTarget?.name}
+        onClose={() => setShareTarget(null)}
+        showToast={showToast}
       />
       <TextInputModal
         open={renameCurrentOpen}

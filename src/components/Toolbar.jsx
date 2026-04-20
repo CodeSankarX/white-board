@@ -14,6 +14,7 @@ export function Toolbar({
   onNewDiagram,
   onShowShortcuts,
   onOpenVersions,
+  onShare,
   savingDisabled,
 }) {
   const timeLabel =
@@ -115,6 +116,17 @@ export function Toolbar({
                 title="View and restore Drive file versions"
               >
                 Versions
+              </button>
+            ) : null}
+            {onShare ? (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={onShare}
+                aria-label="Share this diagram"
+                title="Share link or invite people by email (Google Drive)"
+              >
+                Share
               </button>
             ) : null}
             {onShowShortcuts ? (
