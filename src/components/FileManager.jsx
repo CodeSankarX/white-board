@@ -102,6 +102,40 @@ export function FileManager({
 
   if (!open) return null;
 
+  if (!folderId) {
+    return (
+      <div
+        className="file-manager-overlay"
+        role="presentation"
+        onClick={onClose}
+      >
+        <div
+          className="file-manager"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="file-manager-title"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="file-manager__header">
+            <h2 id="file-manager-title">Your diagrams</h2>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              Close
+            </button>
+          </div>
+          <p className="file-manager__empty">
+            Sign in with Google in the toolbar to browse and open files from your
+            Excalidraw Drive folder.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="file-manager-overlay"

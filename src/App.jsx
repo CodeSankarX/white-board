@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { Excalidraw, restore, serializeAsJSON } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import {
@@ -34,8 +40,46 @@ let sessionRestoreAttempted = false;
 /** Resume this diagram after refresh when it still exists in Drive. */
 const LAST_DIAGRAM_ID_KEY = "excalidraw_drive_last_diagram_id";
 
+/** Guest / signed-out sketch persisted in this tab (sessionStorage). */
+const LOCAL_DRAFT_KEY = "excalidraw_drive_local_draft";
+
 function emptySerialized() {
   return serializeAsJSON([], {}, {}, "local");
+}
+
+function sceneFromSerialized(serialized) {
+  const data = restore(
+    JSON.parse(serialized),
+    null,
+    null,
+    { repairBindings: true },
+  );
+  return {
+    elements: data.elements,
+    appState: data.appState,
+    files: data.files,
+  };
+}
+
+function readGuestDraftSerialized() {
+  try {
+    const raw = sessionStorage.getItem(LOCAL_DRAFT_KEY);
+    return raw?.trim() ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function initialGuestScene() {
+  const stored = readGuestDraftSerialized();
+  if (stored) {
+    try {
+      return sceneFromSerialized(stored);
+    } catch {
+      /* fall through */
+    }
+  }
+  return sceneFromSerialized(emptySerialized());
 }
 
 function pickResumedFile(files) {
@@ -55,12 +99,13 @@ function pickResumedFile(files) {
 export default function App() {
   const apiRef = useRef(null);
   const lastSavedSerializedRef = useRef(null);
+  const localPersistTimerRef = useRef(null);
 
   const [signedIn, setSignedIn] = useState(false);
   const [booting, setBooting] = useState(false);
   const [folderId, setFolderId] = useState(null);
   const [activeFile, setActiveFile] = useState(null);
-  const [initialScene, setInitialScene] = useState(null);
+  const [initialScene, setInitialScene] = useState(() => initialGuestScene());
   const [fileManagerOpen, setFileManagerOpen] = useState(false);
   const [fileSearchFocusNonce, setFileSearchFocusNonce] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -102,7 +147,7 @@ export default function App() {
     });
 
   const hasUnsavedChanges =
-    Boolean(signedIn && initialScene && activeFile && !booting) && isDirty();
+    Boolean(initialScene && !booting) && isDirty();
 
   useEffect(() => {
     const flushIfHidden = () => {
@@ -118,62 +163,95 @@ export default function App() {
 
   useEffect(() => {
     const onBeforeUnload = (e) => {
-      if (!signedIn || !activeFile?.id || !initialScene) return;
-      if (!isDirty()) return;
+      if (!initialScene || booting || !isDirty()) return;
+      if (signedIn && !activeFile?.id) return;
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [signedIn, activeFile?.id, initialScene, isDirty]);
+  }, [signedIn, activeFile?.id, initialScene, booting, isDirty]);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
     window.setTimeout(() => setToast(null), 5000);
   }, []);
 
-  const bootstrapSessionRef = useRef(null);
-  const bootstrapSession = useCallback(async (token) => {
-    setBooting(true);
+  useLayoutEffect(() => {
+    if (readPersistedAccessToken()) return;
     try {
+      const s = readGuestDraftSerialized();
+      lastSavedSerializedRef.current =
+        s && s.trim() ? s.trim() : emptySerialized().trim();
+    } catch {
+      lastSavedSerializedRef.current = emptySerialized().trim();
+    }
+  }, []);
+
+  const hydrateDriveWorkspace = useCallback(
+    async (token, { uploadLocalDraft } = {}) => {
       await initDriveClient(token);
       setDriveAccessToken(token);
       const folder = await findAppFolderId();
       setFolderId(folder);
-      const list = await listExcalidrawFiles(folder);
-      let fileMeta;
-      let content;
-      if (list.length === 0) {
-        const empty = emptySerialized();
-        fileMeta = await createTextFile(folder, "Untitled.excalidraw", empty);
-        content = empty;
+      const emptyTrim = emptySerialized().trim();
+      const draft =
+        typeof uploadLocalDraft === "string"
+          ? uploadLocalDraft.trim()
+          : "";
+
+      if (draft && draft !== emptyTrim) {
+        const fileMeta = await createTextFile(
+          folder,
+          "Untitled.excalidraw",
+          uploadLocalDraft,
+        );
+        setActiveFile({ id: fileMeta.id, name: fileMeta.name });
+        setInitialScene(sceneFromSerialized(uploadLocalDraft));
+        lastSavedSerializedRef.current = draft;
+        try {
+          sessionStorage.removeItem(LOCAL_DRAFT_KEY);
+        } catch {
+          /* ignore */
+        }
       } else {
-        fileMeta = pickResumedFile(list);
-        content = await downloadFileText(fileMeta.id);
+        const list = await listExcalidrawFiles(folder);
+        let fileMeta;
+        let content;
+        if (list.length === 0) {
+          const empty = emptySerialized();
+          fileMeta = await createTextFile(folder, "Untitled.excalidraw", empty);
+          content = empty;
+        } else {
+          fileMeta = pickResumedFile(list);
+          content = await downloadFileText(fileMeta.id);
+        }
+        setActiveFile({ id: fileMeta.id, name: fileMeta.name });
+        setInitialScene(sceneFromSerialized(content));
+        lastSavedSerializedRef.current = content.trim();
       }
-      setActiveFile({ id: fileMeta.id, name: fileMeta.name });
-      const data = restore(
-        JSON.parse(content),
-        null,
-        null,
-        { repairBindings: true },
-      );
-      setInitialScene({
-        elements: data.elements,
-        appState: data.appState,
-        files: data.files,
-      });
-      lastSavedSerializedRef.current = content.trim();
       setSignedIn(true);
-    } catch (e) {
-      console.error(e);
-      showToast(e?.message || String(e));
-      gisSignOut();
-      setSignedIn(false);
-    } finally {
-      setBooting(false);
-    }
-  }, [showToast]);
+    },
+    [],
+  );
+
+  const bootstrapSessionRef = useRef(null);
+  const bootstrapSession = useCallback(
+    async (token) => {
+      setBooting(true);
+      try {
+        await hydrateDriveWorkspace(token, { uploadLocalDraft: null });
+      } catch (e) {
+        console.error(e);
+        showToast(e?.message || String(e));
+        gisSignOut();
+        setSignedIn(false);
+      } finally {
+        setBooting(false);
+      }
+    },
+    [hydrateDriveWorkspace, showToast],
+  );
 
   useEffect(() => {
     if (activeFile?.id) {
@@ -204,13 +282,34 @@ export default function App() {
 
   useEffect(() => {
     const onInvalidated = () => {
+      let snap = lastSavedSerializedRef.current ?? emptySerialized();
+      try {
+        const api = apiRef.current;
+        if (api) {
+          snap = serializeAsJSON(
+            api.getSceneElements(),
+            api.getAppState(),
+            api.getFiles(),
+            "local",
+          );
+        }
+      } catch {
+        /* keep snap */
+      }
       setSignedIn(false);
       setFolderId(null);
       setActiveFile(null);
-      setInitialScene(null);
-      lastSavedSerializedRef.current = null;
+      try {
+        setInitialScene(sceneFromSerialized(snap));
+        lastSavedSerializedRef.current = snap.trim();
+        sessionStorage.setItem(LOCAL_DRAFT_KEY, snap);
+      } catch {
+        setInitialScene(sceneFromSerialized(emptySerialized()));
+        lastSavedSerializedRef.current = emptySerialized().trim();
+      }
+      setSceneEpoch((n) => n + 1);
       apiRef.current = null;
-      showToast("Your Google session expired. Sign in again.");
+      showToast("Your Google session expired. You can keep editing locally; sign in again to save to Drive.");
     };
     window.addEventListener("excalidraw-drive-auth-invalidated", onInvalidated);
     return () =>
@@ -223,14 +322,39 @@ export default function App() {
   const handleSignIn = useCallback(async () => {
     try {
       const token = await requestAccessToken();
-      await bootstrapSession(token);
+      const draft = getSerialized();
+      setBooting(true);
+      try {
+        await hydrateDriveWorkspace(token, { uploadLocalDraft: draft });
+      } catch (e) {
+        console.error(e);
+        showToast(e?.message || String(e));
+        gisSignOut();
+        setSignedIn(false);
+      } finally {
+        setBooting(false);
+      }
     } catch (e) {
       console.error(e);
       showToast(e?.message || "Sign-in failed");
     }
-  }, [bootstrapSession, showToast]);
+  }, [getSerialized, hydrateDriveWorkspace, showToast]);
 
   const handleSignOut = useCallback(() => {
+    let snap = lastSavedSerializedRef.current ?? emptySerialized();
+    try {
+      const api = apiRef.current;
+      if (api) {
+        snap = serializeAsJSON(
+          api.getSceneElements(),
+          api.getAppState(),
+          api.getFiles(),
+          "local",
+        );
+      }
+    } catch {
+      /* keep snap */
+    }
     gisSignOut();
     try {
       sessionStorage.removeItem(LAST_DIAGRAM_ID_KEY);
@@ -240,17 +364,56 @@ export default function App() {
     setSignedIn(false);
     setFolderId(null);
     setActiveFile(null);
-    setInitialScene(null);
-    lastSavedSerializedRef.current = null;
+    try {
+      sessionStorage.setItem(LOCAL_DRAFT_KEY, snap);
+      setInitialScene(sceneFromSerialized(snap));
+      lastSavedSerializedRef.current = snap.trim();
+    } catch {
+      setInitialScene(sceneFromSerialized(emptySerialized()));
+      lastSavedSerializedRef.current = emptySerialized().trim();
+    }
+    setSceneEpoch((n) => n + 1);
     apiRef.current = null;
   }, []);
 
   const handleExcalidrawChange = useCallback(() => {
     bump();
-  }, [bump]);
+    if (signedIn) return;
+    window.clearTimeout(localPersistTimerRef.current);
+    localPersistTimerRef.current = window.setTimeout(() => {
+      try {
+        sessionStorage.setItem(LOCAL_DRAFT_KEY, getSerialized());
+      } catch {
+        /* quota / private mode */
+      }
+    }, 500);
+  }, [bump, signedIn, getSerialized]);
+
+  useEffect(() => {
+    return () => {
+      window.clearTimeout(localPersistTimerRef.current);
+    };
+  }, []);
+
+  const resetGuestCanvas = useCallback(() => {
+    const empty = emptySerialized();
+    setInitialScene(sceneFromSerialized(empty));
+    lastSavedSerializedRef.current = empty.trim();
+    try {
+      sessionStorage.setItem(LOCAL_DRAFT_KEY, empty);
+    } catch {
+      /* ignore */
+    }
+    setActiveFile(null);
+    setSceneEpoch((n) => n + 1);
+  }, []);
 
   const handleOpenRemoteFile = useCallback(
     async (f) => {
+      if (!signedIn) {
+        showToast("Sign in to open files from Google Drive.");
+        return;
+      }
       try {
         if (f.id === activeFile?.id) {
           setFileManagerOpen(false);
@@ -282,10 +445,22 @@ export default function App() {
         showToast(e?.message || "Could not open file");
       }
     },
-    [activeFile?.id, isDirty, showToast],
+    [activeFile?.id, isDirty, showToast, signedIn],
   );
 
   const handleNewDiagram = useCallback(async () => {
+    if (!signedIn) {
+      if (
+        isDirty() &&
+        !window.confirm(
+          "Discard your local sketch and start a new blank canvas?",
+        )
+      ) {
+        return;
+      }
+      resetGuestCanvas();
+      return;
+    }
     if (!folderId) return;
     if (
       isDirty() &&
@@ -294,7 +469,7 @@ export default function App() {
       return;
     }
     setNewDiagramOpen(true);
-  }, [folderId, isDirty]);
+  }, [signedIn, isDirty, folderId, resetGuestCanvas]);
 
   const applyNewDiagram = useCallback(
     async (nameRaw) => {
@@ -331,17 +506,24 @@ export default function App() {
   );
 
   const handleManualSave = useCallback(async () => {
+    if (!signedIn || !activeFile?.id) {
+      showToast("Sign in with Google to save to Drive.");
+      return;
+    }
     try {
       await saveNow();
     } catch (e) {
       showToast(e?.message || "Save failed");
     }
-  }, [saveNow, showToast]);
+  }, [signedIn, activeFile?.id, saveNow, showToast]);
 
   const handleRenameCurrent = useCallback(() => {
-    if (!activeFile?.id) return;
+    if (!activeFile?.id) {
+      showToast("Sign in and open a Drive file to rename it.");
+      return;
+    }
     setRenameCurrentOpen(true);
-  }, [activeFile?.id]);
+  }, [activeFile?.id, showToast]);
 
   const applyRenameCurrent = useCallback(
     async (next) => {
@@ -417,7 +599,7 @@ export default function App() {
     () => ({
       signedIn,
       booting,
-      savingDisabled: !signedIn || !activeFile || booting,
+      savingDisabled: booting || !signedIn || !activeFile?.id,
       fileManagerOpen,
       shortcutsOpen,
       versionHistoryOpen,
@@ -452,7 +634,7 @@ export default function App() {
         signedIn={signedIn}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
-        fileName={activeFile?.name}
+        fileName={activeFile?.name ?? (!signedIn ? "Local sketch" : undefined)}
         saveStatus={saveStatus}
         lastSavedAt={lastSavedAt}
         hasUnsavedChanges={hasUnsavedChanges}
@@ -460,9 +642,7 @@ export default function App() {
         onSave={handleManualSave}
         onOpenFiles={() => setFileManagerOpen(true)}
         onNewDiagram={handleNewDiagram}
-        onShowShortcuts={
-          signedIn ? () => setShortcutsOpen(true) : undefined
-        }
+        onShowShortcuts={() => setShortcutsOpen(true)}
         onOpenVersions={
           signedIn && activeFile?.id
             ? () => setVersionHistoryOpen(true)
@@ -477,7 +657,7 @@ export default function App() {
                 })
             : undefined
         }
-        savingDisabled={!signedIn || !activeFile || booting}
+        savingDisabled={booting || !signedIn || !activeFile?.id}
       />
       <div className="app-canvas-wrap">
         {booting && (
@@ -489,9 +669,13 @@ export default function App() {
             </div>
           </div>
         )}
-        {signedIn && initialScene && activeFile && !booting && (
+        {initialScene && !booting && (
           <Excalidraw
-            key={`${activeFile.id}-${sceneEpoch}`}
+            key={
+              activeFile?.id
+                ? `${activeFile.id}-${sceneEpoch}`
+                : `guest-${sceneEpoch}`
+            }
             excalidrawAPI={(api) => {
               apiRef.current = api;
             }}
@@ -507,21 +691,6 @@ export default function App() {
               },
             }}
           />
-        )}
-        {!signedIn && !booting && (
-          <div className="app-overlay app-overlay--welcome">
-            <div className="app-overlay__card app-overlay__card--welcome">
-              <div className="app-overlay__deco" aria-hidden="true" />
-              <h1 className="app-overlay__hero-title">Welcome to Gcalidraw</h1>
-              <p className="app-overlay__hero-text">
-                Sketch freely — diagrams save to your Google Drive in the{" "}
-                <strong>Excalidraw Drive</strong> folder. No server, your data.
-              </p>
-              <p className="app-overlay__hint">
-                Use <strong>Sign in with Google</strong> in the toolbar to begin.
-              </p>
-            </div>
-          </div>
         )}
       </div>
       <FileManager
