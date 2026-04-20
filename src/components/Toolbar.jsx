@@ -7,10 +7,13 @@ export function Toolbar({
   fileName,
   saveStatus,
   lastSavedAt,
+  hasUnsavedChanges,
+  autoSaveAfterSec,
   onSave,
   onOpenFiles,
   onNewDiagram,
   onShowShortcuts,
+  onOpenVersions,
   savingDisabled,
 }) {
   const timeLabel =
@@ -22,17 +25,25 @@ export function Toolbar({
       : null;
 
   let statusClass = "app-toolbar__pill";
-  let statusText = "Ready";
+  let statusText = signedIn ? "Auto-save on" : "Not syncing";
   if (saveStatus === "saving") {
     statusText = "Saving…";
     statusClass += " app-toolbar__pill--busy";
   } else if (saveStatus === "saved" && timeLabel) {
-    statusText = `Saved ${timeLabel}`;
+    statusText = `Saved ${timeLabel} · Auto`;
     statusClass += " app-toolbar__pill--ok";
   } else if (saveStatus === "error") {
     statusText = "Save failed";
     statusClass += " app-toolbar__pill--err";
+  } else if (hasUnsavedChanges) {
+    statusText = `Unsaved · auto-save soon (~${autoSaveAfterSec}s)`;
+    statusClass += " app-toolbar__pill--pending";
   }
+
+  const statusTitle =
+    signedIn && typeof autoSaveAfterSec === "number"
+      ? `Auto-saves to Drive about ${autoSaveAfterSec}s after you stop editing. Also saves when you leave this tab if there are changes.`
+      : undefined;
 
   return (
     <header className="app-toolbar" role="banner">
@@ -58,7 +69,12 @@ export function Toolbar({
           {fileName || "—"}
         </span>
       </div>
-      <div className={statusClass} role="status" aria-live="polite">
+      <div
+        className={statusClass}
+        role="status"
+        aria-live="polite"
+        title={statusTitle}
+      >
         {statusText}
       </div>
       <div className="app-toolbar__actions">
@@ -69,7 +85,8 @@ export function Toolbar({
               className="btn btn--primary"
               onClick={() => onSave()}
               disabled={savingDisabled}
-              aria-label="Save to Google Drive"
+              aria-label="Save to Google Drive now"
+              title="Save now (auto-save also runs after you pause editing)"
             >
               Save
             </button>
@@ -89,6 +106,17 @@ export function Toolbar({
             >
               New
             </button>
+            {onOpenVersions ? (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={onOpenVersions}
+                aria-label="Version history on Google Drive"
+                title="View and restore Drive file versions"
+              >
+                Versions
+              </button>
+            ) : null}
             {onShowShortcuts ? (
               <button
                 type="button"

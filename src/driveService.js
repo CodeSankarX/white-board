@@ -182,6 +182,46 @@ export async function downloadFileText(fileId) {
   });
 }
 
+/**
+ * Google Drive revision history (each save creates a new revision when enabled for the file).
+ * @param {string} fileId
+ * @returns {Promise<Array<{ id: string; modifiedTime?: string; size?: string }>>}
+ */
+export async function listDriveRevisions(fileId) {
+  return with401Clear(async () => {
+    const collected = [];
+    let pageToken;
+    do {
+      const res = await window.gapi.client.drive.revisions.list({
+        fileId,
+        pageSize: 100,
+        fields: "nextPageToken, revisions(id, modifiedTime, size)",
+        pageToken: pageToken || undefined,
+      });
+      const revs = res.result.revisions || [];
+      collected.push(...revs);
+      pageToken = res.result.nextPageToken;
+    } while (pageToken);
+    collected.sort((a, b) => {
+      const ta = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+      const tb = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+      return tb - ta;
+    });
+    return collected;
+  });
+}
+
+/** Download a specific revision’s file bytes as text (same as current file for .excalidraw JSON). */
+export async function downloadRevisionText(fileId, revisionId) {
+  return with401Clear(async () => {
+    const res = await driveFetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}?alt=media`,
+      { method: "GET" },
+    );
+    return res.text();
+  });
+}
+
 export async function renameFile(fileId, newName) {
   return with401Clear(async () => {
     const name = newName.endsWith(".excalidraw")

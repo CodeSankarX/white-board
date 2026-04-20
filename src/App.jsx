@@ -9,6 +9,7 @@ import {
 import {
   createTextFile,
   downloadFileText,
+  downloadRevisionText,
   findAppFolderId,
   initDriveClient,
   listExcalidrawFiles,
@@ -19,6 +20,7 @@ import {
 import { FileManager } from "./components/FileManager.jsx";
 import { ShortcutsHelp } from "./components/ShortcutsHelp.jsx";
 import { Toolbar } from "./components/Toolbar.jsx";
+import { VersionHistory } from "./components/VersionHistory.jsx";
 import { useAutoSave } from "./hooks/useAutoSave.js";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.js";
 
@@ -58,7 +60,10 @@ export default function App() {
   const [activeFile, setActiveFile] = useState(null);
   const [initialScene, setInitialScene] = useState(null);
   const [fileManagerOpen, setFileManagerOpen] = useState(false);
+  const [fileSearchFocusNonce, setFileSearchFocusNonce] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  const [sceneEpoch, setSceneEpoch] = useState(0);
   const [toast, setToast] = useState(null);
 
   const getSerialized = useCallback(() => {
@@ -90,6 +95,32 @@ export default function App() {
       lastSavedSerializedRef,
       save: saveToDrive,
     });
+
+  const hasUnsavedChanges =
+    Boolean(signedIn && initialScene && activeFile && !booting) && isDirty();
+
+  useEffect(() => {
+    const flushIfHidden = () => {
+      if (document.visibilityState !== "hidden") return;
+      if (!signedIn || !activeFile?.id || booting || !initialScene) return;
+      if (!isDirty()) return;
+      void saveNow().catch(() => {});
+    };
+    document.addEventListener("visibilitychange", flushIfHidden);
+    return () =>
+      document.removeEventListener("visibilitychange", flushIfHidden);
+  }, [signedIn, activeFile?.id, booting, initialScene, saveNow, isDirty]);
+
+  useEffect(() => {
+    const onBeforeUnload = (e) => {
+      if (!signedIn || !activeFile?.id || !initialScene) return;
+      if (!isDirty()) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [signedIn, activeFile?.id, initialScene, isDirty]);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -140,12 +171,14 @@ export default function App() {
   }, [showToast]);
 
   useEffect(() => {
-    if (!activeFile?.id) return;
-    try {
-      sessionStorage.setItem(LAST_DIAGRAM_ID_KEY, activeFile.id);
-    } catch {
-      /* ignore */
+    if (activeFile?.id) {
+      try {
+        sessionStorage.setItem(LAST_DIAGRAM_ID_KEY, activeFile.id);
+      } catch {
+        /* ignore */
+      }
     }
+    setSceneEpoch(0);
   }, [activeFile?.id]);
 
   bootstrapSessionRef.current = bootstrapSession;
@@ -322,6 +355,38 @@ export default function App() {
     [folderId, showToast],
   );
 
+  const handleRestoreRevision = useCallback(
+    async (revisionId) => {
+      if (!activeFile?.id) return;
+      const msg = isDirty()
+        ? "Discard unsaved edits and replace the diagram with this Drive version? Google Drive will be updated."
+        : "Replace the current diagram on Google Drive with this saved version?";
+      if (!window.confirm(msg)) return;
+      try {
+        const text = await downloadRevisionText(activeFile.id, revisionId);
+        await updateFileContent(activeFile.id, text);
+        const data = restore(
+          JSON.parse(text),
+          null,
+          null,
+          { repairBindings: true },
+        );
+        lastSavedSerializedRef.current = text.trim();
+        setInitialScene({
+          elements: data.elements,
+          appState: data.appState,
+          files: data.files,
+        });
+        setSceneEpoch((e) => e + 1);
+        showToast("Restored a version from Drive history");
+      } catch (e) {
+        showToast(e?.message || "Could not restore version");
+        throw e;
+      }
+    },
+    [activeFile?.id, isDirty, showToast],
+  );
+
   useKeyboardShortcuts(
     () => ({
       signedIn,
@@ -329,6 +394,7 @@ export default function App() {
       savingDisabled: !signedIn || !activeFile || booting,
       fileManagerOpen,
       shortcutsOpen,
+      versionHistoryOpen,
       hasFolder: Boolean(folderId),
       hasActiveFile: Boolean(activeFile?.id),
     }),
@@ -337,6 +403,10 @@ export default function App() {
         void handleManualSave();
       },
       onOpenFiles: () => setFileManagerOpen(true),
+      onOpenFileSearch: () => {
+        setFileManagerOpen(true);
+        setFileSearchFocusNonce((n) => n + 1);
+      },
       onNewDiagram: () => {
         void handleNewDiagram();
       },
@@ -346,6 +416,7 @@ export default function App() {
       onCloseFileManager: () => setFileManagerOpen(false),
       onOpenShortcuts: () => setShortcutsOpen(true),
       onCloseShortcuts: () => setShortcutsOpen(false),
+      onCloseVersionHistory: () => setVersionHistoryOpen(false),
     },
   );
 
@@ -358,11 +429,18 @@ export default function App() {
         fileName={activeFile?.name}
         saveStatus={saveStatus}
         lastSavedAt={lastSavedAt}
+        hasUnsavedChanges={hasUnsavedChanges}
+        autoSaveAfterSec={Math.round(AUTOSAVE_MS / 1000)}
         onSave={handleManualSave}
         onOpenFiles={() => setFileManagerOpen(true)}
         onNewDiagram={handleNewDiagram}
         onShowShortcuts={
           signedIn ? () => setShortcutsOpen(true) : undefined
+        }
+        onOpenVersions={
+          signedIn && activeFile?.id
+            ? () => setVersionHistoryOpen(true)
+            : undefined
         }
         savingDisabled={!signedIn || !activeFile || booting}
       />
@@ -378,7 +456,7 @@ export default function App() {
         )}
         {signedIn && initialScene && activeFile && !booting && (
           <Excalidraw
-            key={activeFile.id}
+            key={`${activeFile.id}-${sceneEpoch}`}
             excalidrawAPI={(api) => {
               apiRef.current = api;
             }}
@@ -418,10 +496,19 @@ export default function App() {
         activeFileId={activeFile?.id}
         onOpenFile={handleOpenRemoteFile}
         onDuplicateFile={signedIn ? handleDuplicateFile : undefined}
+        focusSearchNonce={fileSearchFocusNonce}
       />
       <ShortcutsHelp
         open={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
+        autoSaveAfterSec={Math.round(AUTOSAVE_MS / 1000)}
+      />
+      <VersionHistory
+        open={versionHistoryOpen}
+        onClose={() => setVersionHistoryOpen(false)}
+        fileId={activeFile?.id}
+        fileName={activeFile?.name}
+        onRestoreRevision={handleRestoreRevision}
       />
       <div className="app-toast" hidden={!toast} role="alert">
         {toast}

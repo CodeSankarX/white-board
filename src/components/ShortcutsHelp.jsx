@@ -3,7 +3,7 @@ function modSymbol() {
   return /Mac|iPhone|iPod|iPad/i.test(navigator.userAgent) ? "⌘" : "Ctrl";
 }
 
-export function ShortcutsHelp({ open, onClose }) {
+export function ShortcutsHelp({ open, onClose, autoSaveAfterSec = 30 }) {
   if (!open) return null;
   const m = modSymbol();
 
@@ -57,6 +57,13 @@ export function ShortcutsHelp({ open, onClose }) {
               </td>
             </tr>
             <tr>
+              <td>Search diagrams (focus search)</td>
+              <td>
+                <kbd className="shortcuts-help__kbd">{m}</kbd>{" "}
+                <kbd className="shortcuts-help__kbd">K</kbd>
+              </td>
+            </tr>
+            <tr>
               <td>New diagram</td>
               <td>
                 <kbd className="shortcuts-help__kbd">{m}</kbd>{" "}
@@ -86,6 +93,12 @@ export function ShortcutsHelp({ open, onClose }) {
             </tr>
           </tbody>
         </table>
+        <p className="shortcuts-help__autosave">
+          <strong>Auto-save:</strong> your diagram uploads to Google Drive about{" "}
+          {autoSaveAfterSec} seconds after you stop drawing. If you switch tabs or
+          hide this window with unsaved edits, it saves right away. Closing the
+          browser may still warn you if something has not finished uploading.
+        </p>
       </div>
     </div>
   );

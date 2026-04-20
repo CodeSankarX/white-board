@@ -26,6 +26,7 @@ export function FileManager({
   activeFileId,
   onOpenFile,
   onDuplicateFile,
+  focusSearchNonce = 0,
 }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -66,6 +67,17 @@ export function FileManager({
     });
     return () => cancelAnimationFrame(id);
   }, [open, loading, files.length]);
+
+  useEffect(() => {
+    if (!open || !focusSearchNonce || loading || files.length === 0) return;
+    const id = requestAnimationFrame(() => {
+      const el = searchInputRef.current;
+      if (!el) return;
+      el.focus();
+      if (typeof el.select === "function") el.select();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [open, focusSearchNonce, loading, files.length]);
 
   const filteredFiles = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();

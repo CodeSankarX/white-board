@@ -22,17 +22,20 @@ function isEditableTarget(node) {
  *   savingDisabled: boolean;
  *   fileManagerOpen: boolean;
  *   shortcutsOpen: boolean;
+ *   versionHistoryOpen: boolean;
  *   hasFolder: boolean;
  *   hasActiveFile: boolean;
  * }} getState
  * @param {{
  *   onSave: () => void | Promise<void>;
  *   onOpenFiles: () => void;
+ *   onOpenFileSearch: () => void;
  *   onNewDiagram: () => void;
  *   onRenameCurrent: () => void;
  *   onCloseFileManager: () => void;
  *   onOpenShortcuts: () => void;
  *   onCloseShortcuts: () => void;
+ *   onCloseVersionHistory: () => void;
  * }} actions
  */
 export function useKeyboardShortcuts(getState, actions) {
@@ -50,6 +53,14 @@ export function useKeyboardShortcuts(getState, actions) {
         if (e.key === "Escape") {
           e.preventDefault();
           a.onCloseShortcuts();
+        }
+        return;
+      }
+
+      if (s.versionHistoryOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          a.onCloseVersionHistory();
         }
         return;
       }
@@ -88,6 +99,14 @@ export function useKeyboardShortcuts(getState, actions) {
         e.preventDefault();
         e.stopPropagation();
         a.onOpenFiles();
+        return;
+      }
+
+      if (key === "k") {
+        if (!s.signedIn || s.booting) return;
+        e.preventDefault();
+        e.stopPropagation();
+        a.onOpenFileSearch();
         return;
       }
 
