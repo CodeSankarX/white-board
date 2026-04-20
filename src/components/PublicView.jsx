@@ -37,7 +37,7 @@ export function PublicView({ fileId, onOpenEditor }) {
         if (!cancelled) {
           let msg = e?.message || String(e);
           if (/failed to fetch|networkerror|load failed/i.test(msg)) {
-            msg = `${msg} — Often caused by a browser extension (ad blocker), strict network policy, or Content-Security-Policy on the host. Set VITE_GOOGLE_API_KEY to load from Google without third-party relays, or try another browser / network.`;
+            msg = `${msg} — Often caused by a browser extension (ad blocker), strict network policy, or Content-Security-Policy on the host. Try another browser or network.`;
           }
           setError(msg);
           setPhase("error");
@@ -86,9 +86,7 @@ export function PublicView({ fileId, onOpenEditor }) {
             <p className="public-view__err-hint">
               The file must be shared with <strong>Anyone with the link can view</strong>.
               You can still try{" "}
-              <a href={getDriveFileViewUrl(fileId)}>Open in Drive</a>. The site
-              owner can set <code className="share-dialog__code">VITE_GOOGLE_API_KEY</code>{" "}
-              for more reliable loads (see README).
+              <a href={getDriveFileViewUrl(fileId)}>Open in Drive</a>.
             </p>
           </div>
         ) : null}

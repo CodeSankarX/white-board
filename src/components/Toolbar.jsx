@@ -1,7 +1,14 @@
 const LOGO_SRC = `${import.meta.env.BASE_URL}gcalidraw-logo.svg`;
 
+/** Shown in the toolbar; Drive files keep the .excalidraw suffix internally. */
+function fileNameForToolbarDisplay(name) {
+  if (!name) return "";
+  return name.replace(/\.excalidraw$/i, "");
+}
+
 export function Toolbar({
   signedIn,
+  signInBusy = false,
   onSignIn,
   onSignOut,
   fileName,
@@ -16,6 +23,7 @@ export function Toolbar({
   onOpenVersions,
   onShare,
   savingDisabled,
+  onRenameFileClick,
 }) {
   const timeLabel =
     lastSavedAt instanceof Date
@@ -55,6 +63,9 @@ export function Toolbar({
       ? "Your sketch is only in this browser until you sign in and save to Google Drive."
       : "Sign in with Google to save diagrams to your Drive folder.";
 
+  const toolbarFileTitle =
+    fileNameForToolbarDisplay(fileName) || fileName || "";
+
   return (
     <header className="app-toolbar" role="banner">
       <div className="app-toolbar__brand">
@@ -73,10 +84,28 @@ export function Toolbar({
           <span className="app-toolbar__tagline">Whiteboard · Google Drive</span>
         </div>
       </div>
-      <div className="app-toolbar__file" title={fileName || ""}>
-        <span className="app-toolbar__file-label">Current file</span>
+      <div className="app-toolbar__file" title={toolbarFileTitle}>
+        {onRenameFileClick ? (
+          <span
+            className="app-toolbar__file-label app-toolbar__file-label--action"
+            role="button"
+            tabIndex={0}
+            onClick={() => onRenameFileClick()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onRenameFileClick();
+              }
+            }}
+            title="Rename this diagram (Google Drive)"
+          >
+            Current file
+          </span>
+        ) : (
+          <span className="app-toolbar__file-label">Current file</span>
+        )}
         <span className="app-toolbar__file-name">
-          {fileName || "—"}
+          {toolbarFileTitle || "—"}
         </span>
       </div>
       <div
@@ -203,7 +232,9 @@ export function Toolbar({
               type="button"
               className="btn btn--google"
               onClick={onSignIn}
+              disabled={signInBusy}
               aria-label="Sign in with Google"
+              aria-busy={signInBusy || undefined}
             >
               <span className="btn__google-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="18" height="18">
@@ -225,7 +256,7 @@ export function Toolbar({
                   />
                 </svg>
               </span>
-              Sign in with Google
+              {signInBusy ? "Signing in…" : "Sign in with Google"}
             </button>
           </>
         )}

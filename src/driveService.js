@@ -1,4 +1,3 @@
-import { getConfig } from "./config.js";
 import { invalidateSession } from "./auth.js";
 
 const FOLDER_NAME = "Excalidraw Drive";
@@ -42,10 +41,6 @@ export async function initDriveClient(accessToken) {
     window.gapi.load("client", async () => {
       try {
         const initOpts = { discoveryDocs: [DISCOVERY_DOC] };
-        const apiKey = getConfig().googleApiKey?.trim();
-        if (apiKey) {
-          initOpts.apiKey = apiKey;
-        }
         await window.gapi.client.init(initOpts);
         window.gapi.client.setToken({ access_token: accessToken });
         resolve();
@@ -62,6 +57,80 @@ export function setDriveAccessToken(accessToken) {
       accessToken ? { access_token: accessToken } : null,
     );
   }
+}
+
+function formatDriveHttpError(status, bodyText) {
+  const raw = (bodyText || "").trim();
+  if (raw) {
+    try {
+      const j = JSON.parse(raw);
+      const msg = j?.error?.message;
+      if (typeof msg === "string" && msg.length) {
+        return `${msg} (HTTP ${status})`;
+      }
+    } catch {
+      /* not JSON */
+    }
+    const clip = raw.length > 400 ? `${raw.slice(0, 400)}…` : raw;
+    return clip || `HTTP ${status}`;
+  }
+  return `HTTP ${status}`;
+}
+
+/**
+ * One-shot Drive file create with binary body (multipart/related).
+ * More reliable than metadata-only create + PATCH media (often fails with drive.file + fetch).
+ * @param {{ name: string; parents: string[]; mimeType: string }} metadata
+ * @param {Blob} mediaBlob
+ * @returns {Promise<{ id: string; name?: string }>}
+ */
+async function driveMultipartCreateFile(metadata, mediaBlob) {
+  const token = window.gapi?.client?.getToken?.()?.access_token;
+  if (!token) {
+    throw new Error("Not authenticated");
+  }
+  const boundary = `gcSnap_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+  const metaJson = JSON.stringify(metadata);
+  const partMeta =
+    `--${boundary}\r\n` +
+    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+    `${metaJson}\r\n`;
+  const partMediaHead =
+    `--${boundary}\r\n` +
+    `Content-Type: ${metadata.mimeType}\r\n\r\n`;
+  const partEnd = `\r\n--${boundary}--\r\n`;
+  const body = new Blob([partMeta, partMediaHead, mediaBlob, partEnd]);
+
+  const res = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    },
+  );
+  if (res.status === 401) {
+    const err = new Error("UNAUTHORIZED");
+    err.status = 401;
+    throw err;
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(formatDriveHttpError(res.status, text));
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Drive returned invalid JSON after PNG upload");
+  }
+  if (!parsed?.id) {
+    throw new Error("Drive upload did not return a file id");
+  }
+  return { id: parsed.id, name: parsed.name };
 }
 
 async function driveFetch(path, init = {}) {
@@ -84,7 +153,7 @@ async function driveFetch(path, init = {}) {
     }
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(text || res.statusText);
+      throw new Error(formatDriveHttpError(res.status, text));
     }
     return res;
   };
@@ -96,6 +165,19 @@ async function driveFetch(path, init = {}) {
     }
     throw e;
   }
+}
+
+/** Try several media URLs (My Drive vs shared drives differ on supportsAllDrives). */
+async function driveFetchFirstWorkingUrl(urls, init = {}) {
+  let lastErr;
+  for (const path of urls) {
+    try {
+      return await driveFetch(path, init);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
 }
 
 export async function findAppFolderId() {
@@ -172,13 +254,63 @@ export async function updateFileContent(fileId, bodyText) {
   });
 }
 
+function fileAltMediaUrls(fileId) {
+  const id = encodeURIComponent(fileId);
+  return [
+    `https://www.googleapis.com/drive/v3/files/${id}?alt=media`,
+    `https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`,
+  ];
+}
+
+function revisionAltMediaUrls(fileId, revisionId) {
+  const f = encodeURIComponent(fileId);
+  const r = encodeURIComponent(revisionId);
+  const base = `https://www.googleapis.com/drive/v3/files/${f}/revisions/${r}`;
+  return [
+    `${base}?alt=media`,
+    `${base}?alt=media&supportsAllDrives=true`,
+  ];
+}
+
 export async function downloadFileText(fileId) {
   return with401Clear(async () => {
-    const res = await driveFetch(
-      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
-      { method: "GET" },
-    );
+    const res = await driveFetchFirstWorkingUrl(fileAltMediaUrls(fileId), {
+      method: "GET",
+    });
     return res.text();
+  });
+}
+
+function assertLooksLikePngBlob(blob) {
+  if (!blob || blob.size < 24) {
+    throw new Error("Downloaded file is empty or too small for a PNG");
+  }
+  const head = new Uint8Array(blob.slice(0, 8));
+  const isPng =
+    head[0] === 0x89 &&
+    head[1] === 0x50 &&
+    head[2] === 0x4e &&
+    head[3] === 0x47 &&
+    head[4] === 0x0d &&
+    head[5] === 0x0a &&
+    head[6] === 0x1a &&
+    head[7] === 0x0a;
+  if (isPng) return;
+  const probe = new TextDecoder("utf-8", { fatal: false }).decode(head);
+  throw new Error(
+    `Drive did not return PNG bytes (got ${blob.type || "unknown"}; starts with: ${probe.replace(/\s+/g, " ").slice(0, 48)})`,
+  );
+}
+
+/** Binary file (e.g. snapshot PNG) for authenticated in-app previews. */
+export async function downloadDriveFileBlob(fileId) {
+  return with401Clear(async () => {
+    const res = await driveFetchFirstWorkingUrl(fileAltMediaUrls(fileId), {
+      method: "GET",
+    });
+    const blob = await res.blob();
+    assertLooksLikePngBlob(blob);
+    return blob;
   });
 }
 
@@ -271,39 +403,18 @@ async function fetchThroughRelays(targetUrl) {
     }
   }
   throw new Error(
-    `All relays failed: ${errors.join(" · ")}. Try another network, disable strict blockers, or set VITE_GOOGLE_API_KEY for direct Google access.`,
+    `All relays failed: ${errors.join(" · ")}. Try another network or disable strict blockers.`,
   );
 }
 
 /**
  * Public `.excalidraw` on Drive, **Anyone with the link can view**, no user OAuth.
- * - With `googleApiKey`: Drive REST `alt=media` (best: private, fast, CSP-friendly).
- * - Without key: try unauthenticated `alt=media` (usually fails), then Drive’s
- *   `uc?export=download` flow via a public CORS relay (handles virus-scan HTML).
+ * Tries unauthenticated `alt=media` (usually fails), then Drive’s
+ * `uc?export=download` flow via a public CORS relay (handles virus-scan HTML).
  */
 export async function downloadPublicDriveFileText(fileId) {
-  const key = getConfig().googleApiKey?.trim();
   const idEnc = encodeURIComponent(fileId);
   const mediaUrl = `https://www.googleapis.com/drive/v3/files/${idEnc}?alt=media`;
-
-  if (key) {
-    const res = await fetch(
-      `${mediaUrl}&key=${encodeURIComponent(key)}`,
-    );
-    if (res.status === 404) {
-      throw new Error("File not found.");
-    }
-    if (res.status === 403 || res.status === 401) {
-      throw new Error(
-        "Access denied for anonymous viewing. Turn on “Anyone with the link can view” in Share, and ensure the API key allows the Drive API from this site’s origin.",
-      );
-    }
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text || res.statusText || `HTTP ${res.status}`);
-    }
-    return res.text();
-  }
 
   try {
     const res = await fetch(mediaUrl);
@@ -335,7 +446,7 @@ export async function downloadPublicDriveFileText(fileId) {
     text.trimStart().startsWith("<")
   ) {
     throw new Error(
-      "Could not load this diagram. Enable “Anyone with the link can view” on the file, or set VITE_GOOGLE_API_KEY for more reliable anonymous access.",
+      "Could not load this diagram. Enable “Anyone with the link can view” on the file.",
     );
   }
   return text;
@@ -356,6 +467,7 @@ export async function listDriveRevisions(fileId) {
         pageSize: 100,
         fields: "nextPageToken, revisions(id, modifiedTime, size)",
         pageToken: pageToken || undefined,
+        supportsAllDrives: true,
       });
       const revs = res.result.revisions || [];
       collected.push(...revs);
@@ -373,12 +485,28 @@ export async function listDriveRevisions(fileId) {
 /** Download a specific revision’s file bytes as text (same as current file for .excalidraw JSON). */
 export async function downloadRevisionText(fileId, revisionId) {
   return with401Clear(async () => {
-    const res = await driveFetch(
-      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revisionId)}?alt=media`,
+    const res = await driveFetchFirstWorkingUrl(
+      revisionAltMediaUrls(fileId, revisionId),
       { method: "GET" },
     );
     return res.text();
   });
+}
+
+/**
+ * Download revision JSON. Uses `files.get` alt=media for the **latest** revision
+ * (Drive recommends this for current content; `revisions.get` can fail for head).
+ * Pass `latestRevisionId` from `listDriveRevisions` (newest-first → first item).
+ */
+export async function downloadAnyRevisionText(
+  fileId,
+  revisionId,
+  latestRevisionId,
+) {
+  if (latestRevisionId && revisionId === latestRevisionId) {
+    return downloadFileText(fileId);
+  }
+  return downloadRevisionText(fileId, revisionId);
 }
 
 export async function renameFile(fileId, newName) {
@@ -400,6 +528,154 @@ export async function trashFile(fileId) {
       fileId,
       resource: { trashed: true },
     });
+  });
+}
+
+const SNAPSHOTS_FOLDER_NAME = "Gcalidraw save images";
+const SNAPSHOT_NAME_PREFIX = "snap__";
+/** Keep at most this many PNG snapshots per diagram (oldest trashed after each new save). */
+const SNAPSHOT_MAX_PER_DIAGRAM = 40;
+
+const snapshotsFolderIdByParent = new Map();
+
+export function clearSnapshotsFolderIdCache() {
+  snapshotsFolderIdByParent.clear();
+}
+
+function sanitizeSnapshotStem(name) {
+  const base = (name || "diagram").replace(/\.excalidraw$/i, "");
+  const cleaned = base.replace(/[/\\?%*:|"<>]/g, "-").trim().slice(0, 80);
+  return cleaned || "diagram";
+}
+
+/**
+ * Subfolder under the Excalidraw Drive folder; holds PNGs created on each save.
+ * @param {string} excalidrawFolderId
+ */
+export async function ensureSnapshotsFolderId(excalidrawFolderId) {
+  return with401Clear(async () => {
+    const cached = snapshotsFolderIdByParent.get(excalidrawFolderId);
+    if (cached) return cached;
+    const q = `'${excalidrawFolderId}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder' and name='${SNAPSHOTS_FOLDER_NAME}'`;
+    const list = await window.gapi.client.drive.files.list({
+      q,
+      fields: "files(id)",
+      pageSize: 5,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const hit = list.result.files?.[0]?.id;
+    if (hit) {
+      snapshotsFolderIdByParent.set(excalidrawFolderId, hit);
+      return hit;
+    }
+    const created = await window.gapi.client.drive.files.create({
+      resource: {
+        name: SNAPSHOTS_FOLDER_NAME,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [excalidrawFolderId],
+      },
+      fields: "id",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const id = created.result.id;
+    snapshotsFolderIdByParent.set(excalidrawFolderId, id);
+    return id;
+  });
+}
+
+function snapshotNamePrefix(sourceFileId) {
+  return `${SNAPSHOT_NAME_PREFIX}${sourceFileId}__`;
+}
+
+function isSnapshotForSource(file, sourceFileId) {
+  const prefix = snapshotNamePrefix(sourceFileId);
+  if (!file?.name?.startsWith(prefix)) return false;
+  const mt = file.mimeType || "";
+  if (mt === "image/png" || mt.startsWith("image/")) return true;
+  return /\.png$/i.test(file.name);
+}
+
+async function listAllSnapshotFolderFiles(snapFolderId) {
+  const q = `'${snapFolderId}' in parents and trashed=false`;
+  const res = await window.gapi.client.drive.files.list({
+    q,
+    fields:
+      "files(id, name, mimeType, createdTime, thumbnailLink, webViewLink, iconLink)",
+    orderBy: "createdTime desc",
+    pageSize: 200,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  return res.result.files || [];
+}
+
+/**
+ * List PNG save snapshots for one .excalidraw file (newest first).
+ * Uses a broad Drive query then filters client-side — `name contains` + strict
+ * mime in `q` often returns nothing even when files exist.
+ * @param {string} excalidrawFolderId
+ * @param {string} sourceFileId
+ */
+export async function listDiagramSnapshots(excalidrawFolderId, sourceFileId) {
+  return with401Clear(async () => {
+    const snapFolderId = await ensureSnapshotsFolderId(excalidrawFolderId);
+    const raw = await listAllSnapshotFolderFiles(snapFolderId);
+    const filtered = raw.filter((f) => isSnapshotForSource(f, sourceFileId));
+    filtered.sort(
+      (a, b) =>
+        new Date(b.createdTime || 0).getTime() -
+        new Date(a.createdTime || 0).getTime(),
+    );
+    return filtered.slice(0, SNAPSHOT_MAX_PER_DIAGRAM);
+  });
+}
+
+async function listSnapshotFilesOldestFirst(snapFolderId, sourceFileId) {
+  const raw = await listAllSnapshotFolderFiles(snapFolderId);
+  const filtered = raw.filter((f) => isSnapshotForSource(f, sourceFileId));
+  filtered.sort(
+    (a, b) =>
+      new Date(a.createdTime || 0).getTime() -
+      new Date(b.createdTime || 0).getTime(),
+  );
+  return filtered;
+}
+
+async function pruneDiagramSnapshots(snapFolderId, sourceFileId) {
+  const files = await listSnapshotFilesOldestFirst(snapFolderId, sourceFileId);
+  const excess = files.length - SNAPSHOT_MAX_PER_DIAGRAM;
+  if (excess <= 0) return;
+  for (let i = 0; i < excess; i++) {
+    await trashFile(files[i].id);
+  }
+}
+
+/**
+ * Upload one PNG after the JSON body was saved; trims older snapshots for this diagram.
+ */
+export async function saveDiagramSnapshotAfterJsonSave({
+  excalidrawFolderId,
+  sourceFileId,
+  sourceDisplayName,
+  pngBlob,
+}) {
+  return with401Clear(async () => {
+    const snapFolderId = await ensureSnapshotsFolderId(excalidrawFolderId);
+    const label = sanitizeSnapshotStem(sourceDisplayName);
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const name = `${SNAPSHOT_NAME_PREFIX}${sourceFileId}__${ts}__${label}.png`;
+    const created = await driveMultipartCreateFile(
+      {
+        name,
+        parents: [snapFolderId],
+        mimeType: "image/png",
+      },
+      pngBlob,
+    );
+    await pruneDiagramSnapshots(snapFolderId, sourceFileId);
+    return { id: created.id, name: created.name ?? name };
   });
 }
 

@@ -5,7 +5,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { Excalidraw, restore, serializeAsJSON } from "@excalidraw/excalidraw";
+import {
+  Excalidraw,
+  exportToBlob,
+  getNonDeletedElements,
+  MIME_TYPES,
+  restore,
+  serializeAsJSON,
+} from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import {
   readPersistedAccessToken,
@@ -13,13 +20,16 @@ import {
   signOut as gisSignOut,
 } from "./auth.js";
 import {
+  clearSnapshotsFolderIdCache,
   createTextFile,
+  downloadAnyRevisionText,
   downloadFileText,
-  downloadRevisionText,
   findAppFolderId,
   initDriveClient,
+  listDriveRevisions,
   listExcalidrawFiles,
   renameFile,
+  saveDiagramSnapshotAfterJsonSave,
   setDriveAccessToken,
   updateFileContent,
 } from "./driveService.js";
@@ -102,7 +112,9 @@ export default function App() {
   const localPersistTimerRef = useRef(null);
 
   const [signedIn, setSignedIn] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
   const [booting, setBooting] = useState(false);
+  const [openingRemoteFile, setOpeningRemoteFile] = useState(false);
   const [folderId, setFolderId] = useState(null);
   const [activeFile, setActiveFile] = useState(null);
   const [initialScene, setInitialScene] = useState(() => initialGuestScene());
@@ -110,11 +122,18 @@ export default function App() {
   const [fileSearchFocusNonce, setFileSearchFocusNonce] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  /** Excalidraw shares one global editor store; only one instance can be mounted. */
+  const [revisionPreviewActive, setRevisionPreviewActive] = useState(false);
   const [sceneEpoch, setSceneEpoch] = useState(0);
   const [renameCurrentOpen, setRenameCurrentOpen] = useState(false);
   const [newDiagramOpen, setNewDiagramOpen] = useState(false);
   const [shareTarget, setShareTarget] = useState(null);
   const [toast, setToast] = useState(null);
+
+  const showToast = useCallback((msg) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(null), 5000);
+  }, []);
 
   const getSerialized = useCallback(() => {
     const api = apiRef.current;
@@ -133,8 +152,43 @@ export default function App() {
     async (serialized) => {
       if (!activeFile?.id) return;
       await updateFileContent(activeFile.id, serialized);
+      if (!folderId || revisionPreviewActive) return;
+      const api = apiRef.current;
+      if (!api) return;
+      try {
+        const appState = api.getAppState();
+        const elements = getNonDeletedElements(api.getSceneElements());
+        const blob = await exportToBlob({
+          elements,
+          appState: {
+            ...appState,
+            exportBackground: true,
+          },
+          files: api.getFiles(),
+          mimeType: MIME_TYPES.png,
+          exportPadding: 12,
+          maxWidthOrHeight: 2400,
+        });
+        if (!blob || blob.size < 32) {
+          throw new Error("PNG export was empty or too small");
+        }
+        await saveDiagramSnapshotAfterJsonSave({
+          excalidrawFolderId: folderId,
+          sourceFileId: activeFile.id,
+          sourceDisplayName: activeFile.name,
+          pngBlob: blob,
+        });
+      } catch (e) {
+        console.warn("PNG snapshot upload failed", e);
+        showToast(
+          `Could not save PNG to Drive: ${e?.message || String(e)}`.slice(
+            0,
+            220,
+          ),
+        );
+      }
     },
-    [activeFile?.id],
+    [activeFile, folderId, revisionPreviewActive, showToast],
   );
 
   const { status: saveStatus, lastSavedAt, bump, saveNow, isDirty } =
@@ -171,11 +225,6 @@ export default function App() {
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [signedIn, activeFile?.id, initialScene, booting, isDirty]);
-
-  const showToast = useCallback((msg) => {
-    setToast(msg);
-    window.setTimeout(() => setToast(null), 5000);
-  }, []);
 
   useLayoutEffect(() => {
     if (readPersistedAccessToken()) return;
@@ -298,6 +347,7 @@ export default function App() {
       }
       setSignedIn(false);
       setFolderId(null);
+      clearSnapshotsFolderIdCache();
       setActiveFile(null);
       try {
         setInitialScene(sceneFromSerialized(snap));
@@ -320,9 +370,11 @@ export default function App() {
   }, [showToast]);
 
   const handleSignIn = useCallback(async () => {
+    setSigningIn(true);
     try {
       const token = await requestAccessToken();
       const draft = getSerialized();
+      setSigningIn(false);
       setBooting(true);
       try {
         await hydrateDriveWorkspace(token, { uploadLocalDraft: draft });
@@ -337,6 +389,7 @@ export default function App() {
     } catch (e) {
       console.error(e);
       showToast(e?.message || "Sign-in failed");
+      setSigningIn(false);
     }
   }, [getSerialized, hydrateDriveWorkspace, showToast]);
 
@@ -356,6 +409,7 @@ export default function App() {
       /* keep snap */
     }
     gisSignOut();
+    clearSnapshotsFolderIdCache();
     try {
       sessionStorage.removeItem(LAST_DIAGRAM_ID_KEY);
     } catch {
@@ -412,19 +466,20 @@ export default function App() {
     async (f) => {
       if (!signedIn) {
         showToast("Sign in to open files from Google Drive.");
-        return;
+        return false;
       }
+      if (f.id === activeFile?.id) {
+        setFileManagerOpen(false);
+        return true;
+      }
+      if (
+        isDirty() &&
+        !window.confirm("Discard unsaved changes and open this file?")
+      ) {
+        return false;
+      }
+      setOpeningRemoteFile(true);
       try {
-        if (f.id === activeFile?.id) {
-          setFileManagerOpen(false);
-          return;
-        }
-        if (
-          isDirty() &&
-          !window.confirm("Discard unsaved changes and open this file?")
-        ) {
-          return;
-        }
         const text = await downloadFileText(f.id);
         const data = restore(
           JSON.parse(text),
@@ -440,9 +495,13 @@ export default function App() {
         });
         lastSavedSerializedRef.current = text.trim();
         setFileManagerOpen(false);
+        return true;
       } catch (e) {
         console.error(e);
         showToast(e?.message || "Could not open file");
+        return false;
+      } finally {
+        setOpeningRemoteFile(false);
       }
     },
     [activeFile?.id, isDirty, showToast, signedIn],
@@ -571,7 +630,13 @@ export default function App() {
         : "Replace the current diagram on Google Drive with this saved version?";
       if (!window.confirm(msg)) return;
       try {
-        const text = await downloadRevisionText(activeFile.id, revisionId);
+        const revs = await listDriveRevisions(activeFile.id);
+        const headId = revs[0]?.id;
+        const text = await downloadAnyRevisionText(
+          activeFile.id,
+          revisionId,
+          headId,
+        );
         await updateFileContent(activeFile.id, text);
         const data = restore(
           JSON.parse(text),
@@ -632,6 +697,7 @@ export default function App() {
     <div className="app-root">
       <Toolbar
         signedIn={signedIn}
+        signInBusy={signingIn}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
         fileName={activeFile?.name ?? (!signedIn ? "Local sketch" : undefined)}
@@ -657,6 +723,7 @@ export default function App() {
                 })
             : undefined
         }
+        onRenameFileClick={signedIn ? handleRenameCurrent : undefined}
         savingDisabled={booting || !signedIn || !activeFile?.id}
       />
       <div className="app-canvas-wrap">
@@ -669,7 +736,16 @@ export default function App() {
             </div>
           </div>
         )}
-        {initialScene && !booting && (
+        {openingRemoteFile && !booting && (
+          <div className="app-overlay app-overlay--booting" role="status">
+            <div className="app-overlay__card">
+              <span className="app-overlay__spinner" aria-hidden="true" />
+              <p className="app-overlay__title">Opening file</p>
+              <p className="app-overlay__sub">Downloading from Google Drive…</p>
+            </div>
+          </div>
+        )}
+        {initialScene && !booting && !revisionPreviewActive && (
           <Excalidraw
             key={
               activeFile?.id
@@ -715,7 +791,10 @@ export default function App() {
         onClose={() => setVersionHistoryOpen(false)}
         fileId={activeFile?.id}
         fileName={activeFile?.name}
+        excalidrawFolderId={folderId}
         onRestoreRevision={handleRestoreRevision}
+        showToast={showToast}
+        onRevisionPreviewActiveChange={setRevisionPreviewActive}
       />
       <ShareDialog
         open={Boolean(shareTarget)}

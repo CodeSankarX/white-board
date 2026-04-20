@@ -27,8 +27,9 @@ npm install
 2. **Credentials** → Create **OAuth client ID** → type **Web application**.
    - **Authorized JavaScript origins**: e.g. `http://localhost:5173` and `https://YOURNAME.github.io`.
    - Use **only the Client ID** in the browser, never the client secret.
-3. **API key (optional, recommended)** — for **anonymous “view on this site”** links (`#view=DRIVE_FILE_ID`), the app can load a link-shared file **without** an API key by using a public CORS relay for Google’s download URL (works when the file is **Anyone with the link can view**). For **better privacy, speed, and reliability**, create an **API key** in Credentials, enable **Drive API**, restrict it by **HTTP referrers** (e.g. `http://localhost:5173/*`, `https://YOURNAME.github.io/*`), and set `VITE_GOOGLE_API_KEY` in `.env` or a GitHub **variable** for Actions. The key is also used by `gapi` when present.
-4. OAuth consent screen: add scope `.../auth/drive.file`.
+3. OAuth consent screen: add scope `.../auth/drive.file`.
+
+Anonymous **“view on this site”** links (`#view=DRIVE_FILE_ID`) load link-shared files via a public CORS relay when the file is **Anyone with the link can view** (see `driveService.js`).
 
 The OAuth **client ID** for this repo is set in [`src/config.js`](src/config.js). Change it there for another project or fork.
 

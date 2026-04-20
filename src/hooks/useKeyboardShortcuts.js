@@ -59,6 +59,12 @@ export function useKeyboardShortcuts(getState, actions) {
 
       if (s.versionHistoryOpen) {
         if (e.key === "Escape") {
+          if (
+            typeof document !== "undefined" &&
+            document.querySelector(".revision-preview-overlay")
+          ) {
+            return;
+          }
           e.preventDefault();
           a.onCloseVersionHistory();
         }
@@ -69,7 +75,9 @@ export function useKeyboardShortcuts(getState, actions) {
         if (
           typeof document !== "undefined" &&
           (document.querySelector(".text-input-modal-overlay") ||
-            document.querySelector(".share-dialog-overlay"))
+            document.querySelector(".share-dialog-overlay") ||
+            document.querySelector(".revision-preview-overlay") ||
+            document.querySelector(".file-diagram-fullscreen-preview-overlay"))
         ) {
           return;
         }

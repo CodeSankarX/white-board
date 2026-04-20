@@ -219,6 +219,13 @@ export function ShareDialog({ open, fileId, fileName, onClose, showToast }) {
           </p>
         ) : null}
 
+        {loading && !loadError ? (
+          <p className="share-dialog__status" role="status">
+            <span className="file-manager__spinner" aria-hidden="true" />
+            Loading share settings…
+          </p>
+        ) : null}
+
         <section
           className="share-dialog__section"
           aria-labelledby={`${titleId}-app`}
@@ -228,10 +235,8 @@ export function ShareDialog({ open, fileId, fileName, onClose, showToast }) {
           </h3>
           <p className="share-dialog__hint">
             Opens Gcalidraw in <strong>read-only</strong> mode without Google
-            sign-in. Turn on <strong>Anyone with the link</strong> below. An
-            optional <code className="share-dialog__code">VITE_GOOGLE_API_KEY</code>{" "}
-            loads the file directly from Google; without it, a public CORS relay
-            is used (less private; see README).
+            sign-in. Turn on <strong>Anyone with the link</strong> below. A
+            public CORS relay is used to fetch the file (see README).
           </p>
           <div className="share-dialog__field-row">
             <input
@@ -247,6 +252,7 @@ export function ShareDialog({ open, fileId, fileName, onClose, showToast }) {
               type="button"
               className="btn btn--primary btn--sm"
               onClick={() => void copyAppLink()}
+              disabled={loading}
             >
               Copy
             </button>
@@ -290,6 +296,7 @@ export function ShareDialog({ open, fileId, fileName, onClose, showToast }) {
               type="button"
               className="btn btn--ghost btn--sm"
               onClick={() => void copyLink()}
+              disabled={loading}
             >
               Copy
             </button>
@@ -314,7 +321,7 @@ export function ShareDialog({ open, fileId, fileName, onClose, showToast }) {
             onChange={(e) => setEmailsRaw(e.target.value)}
             placeholder="friend@example.com, teammate@company.org"
             spellCheck={false}
-            disabled={inviteBusy}
+            disabled={inviteBusy || loading}
             aria-label="Email addresses to invite"
           />
           <div className="share-dialog__actions">

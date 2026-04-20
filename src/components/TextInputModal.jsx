@@ -18,10 +18,12 @@ export function TextInputModal({
   const id = useId();
   const inputId = `${id}-input`;
   const [value, setValue] = useState(initialValue);
+  const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
+    setSubmitting(false);
     setValue(initialValue ?? "");
     const frame = requestAnimationFrame(() => {
       const el = inputRef.current;
@@ -36,6 +38,7 @@ export function TextInputModal({
     if (!open) return;
     const onKey = (e) => {
       if (e.key === "Escape") {
+        if (submitting) return;
         e.preventDefault();
         e.stopPropagation();
         onClose();
@@ -43,17 +46,20 @@ export function TextInputModal({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, onClose]);
+  }, [open, onClose, submitting]);
 
   if (!open) return null;
 
   const submit = async () => {
     const trimmed = value.trim();
-    if (!trimmed) return;
+    if (!trimmed || submitting) return;
+    setSubmitting(true);
     try {
       await onConfirm(trimmed);
     } catch {
       /* caller may show toast; keep modal open */
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -63,7 +69,7 @@ export function TextInputModal({
       role="presentation"
       onClick={(e) => {
         e.stopPropagation();
-        onClose();
+        if (!submitting) onClose();
       }}
     >
       <div
@@ -81,6 +87,7 @@ export function TextInputModal({
             type="button"
             className="btn btn--ghost btn--sm"
             onClick={onClose}
+            disabled={submitting}
             aria-label="Close"
           >
             Close
@@ -103,6 +110,7 @@ export function TextInputModal({
             className="text-input-modal__input"
             value={value}
             onChange={(e) => setValue(e.target.value)}
+            disabled={submitting}
             autoComplete="off"
             spellCheck={false}
           />
@@ -110,11 +118,16 @@ export function TextInputModal({
             <p className="text-input-modal__helper">{helperText}</p>
           ) : null}
           <div className="text-input-modal__actions">
-            <button type="button" className="btn btn--ghost" onClick={onClose}>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={onClose}
+              disabled={submitting}
+            >
               {cancelLabel}
             </button>
-            <button type="submit" className="btn btn--primary">
-              {confirmLabel}
+            <button type="submit" className="btn btn--primary" disabled={submitting}>
+              {submitting ? "Please wait…" : confirmLabel}
             </button>
           </div>
         </form>

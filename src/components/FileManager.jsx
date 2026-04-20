@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiagramPreviewThumb } from "./DiagramPreviewThumb.jsx";
+import { FileDiagramFullscreenPreview } from "./FileDiagramFullscreenPreview.jsx";
 import { TextInputModal } from "./TextInputModal.jsx";
 import {
   getDriveFileViewUrl,
@@ -38,6 +39,9 @@ export function FileManager({
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("recent");
   const [renameTarget, setRenameTarget] = useState(null);
+  const [fullscreenPreview, setFullscreenPreview] = useState(null);
+  /** While a row action runs, avoid double-clicks and show inline progress. */
+  const [rowBusy, setRowBusy] = useState(null);
   const searchInputRef = useRef(null);
 
   const refresh = useCallback(async () => {
@@ -62,6 +66,7 @@ export function FileManager({
     if (!open) {
       setSearchQuery("");
       setSortBy("recent");
+      setRowBusy(null);
     }
   }, [open]);
 
@@ -99,6 +104,8 @@ export function FileManager({
     }
     return list;
   }, [filteredFiles, sortBy]);
+
+  const rowActionsLocked = rowBusy !== null;
 
   if (!open) return null;
 
@@ -247,9 +254,23 @@ export function FileManager({
               className="file-manager__list"
               aria-label="Diagram files"
             >
-              {displayedFiles.map((f) => (
+              {displayedFiles.map((f) => {
+                const busyKind = (kind) =>
+                  rowBusy?.id === f.id && rowBusy.kind === kind;
+                return (
                 <li key={f.id} className="file-manager__row">
-                  <DiagramPreviewThumb fileId={f.id} />
+                  <button
+                    type="button"
+                    className="file-manager__thumb-btn"
+                    disabled={rowActionsLocked}
+                    onClick={() =>
+                      setFullscreenPreview({ id: f.id, name: f.name })
+                    }
+                    title="Fullscreen preview"
+                    aria-label={`Fullscreen preview of ${f.name}`}
+                  >
+                    <DiagramPreviewThumb fileId={f.id} />
+                  </button>
                   <div className="file-manager__row-content">
                     <div className="file-manager__name-block">
                       <span className="file-manager__name" title={f.name}>
@@ -265,27 +286,52 @@ export function FileManager({
                     <span className="file-manager__actions">
                     <button
                       type="button"
+                      className="btn btn--sm btn--ghost"
+                      disabled={rowActionsLocked}
+                      onClick={() =>
+                        setFullscreenPreview({ id: f.id, name: f.name })
+                      }
+                      aria-label={`Preview ${f.name} full screen`}
+                    >
+                      Preview
+                    </button>
+                    <button
+                      type="button"
                       className="btn btn--sm btn--primary"
-                      onClick={() => onOpenFile(f)}
+                      disabled={rowActionsLocked}
+                      onClick={() => {
+                        void (async () => {
+                          setRowBusy({ id: f.id, kind: "open" });
+                          try {
+                            await onOpenFile(f);
+                          } finally {
+                            setRowBusy(null);
+                          }
+                        })();
+                      }}
                       aria-label={`Open ${f.name}`}
                     >
-                      Open
+                      {busyKind("open") ? "Opening…" : "Open"}
                     </button>
                     {onDuplicateFile ? (
                       <button
                         type="button"
                         className="btn btn--sm btn--ghost"
+                        disabled={rowActionsLocked}
                         onClick={async () => {
+                          setRowBusy({ id: f.id, kind: "duplicate" });
                           try {
                             await onDuplicateFile(f);
                             await refresh();
                           } catch (err) {
                             window.alert(err?.message || String(err));
+                          } finally {
+                            setRowBusy(null);
                           }
                         }}
                         aria-label={`Duplicate ${f.name}`}
                       >
-                        Duplicate
+                        {busyKind("duplicate") ? "Duplicating…" : "Duplicate"}
                       </button>
                     ) : null}
                     <a
@@ -301,6 +347,7 @@ export function FileManager({
                       <button
                         type="button"
                         className="btn btn--sm btn--ghost"
+                        disabled={rowActionsLocked}
                         onClick={() => onShareFile(f)}
                         aria-label={`Share ${f.name}`}
                       >
@@ -310,6 +357,7 @@ export function FileManager({
                     <button
                       type="button"
                       className="btn btn--sm btn--ghost"
+                      disabled={rowActionsLocked}
                       onClick={() => setRenameTarget({ id: f.id, name: f.name })}
                       aria-label={`Rename ${f.name}`}
                     >
@@ -318,6 +366,7 @@ export function FileManager({
                     <button
                       type="button"
                       className="btn btn--sm btn--danger"
+                      disabled={rowActionsLocked}
                       onClick={async () => {
                         if (
                           !window.confirm(
@@ -326,6 +375,7 @@ export function FileManager({
                         ) {
                           return;
                         }
+                        setRowBusy({ id: f.id, kind: "delete" });
                         try {
                           await trashFile(f.id);
                           await refresh();
@@ -336,16 +386,19 @@ export function FileManager({
                           }
                         } catch (err) {
                           window.alert(err?.message || String(err));
+                        } finally {
+                          setRowBusy(null);
                         }
                       }}
                       aria-label={`Delete ${f.name}`}
                     >
-                      Delete
+                      {busyKind("delete") ? "Deleting…" : "Delete"}
                     </button>
                   </span>
                   </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
             {!loading && files.length > 0 && filteredFiles.length === 0 ? (
               <p className="file-manager__empty" role="status">
@@ -358,6 +411,18 @@ export function FileManager({
           <p className="file-manager__empty">No diagrams yet.</p>
         )}
       </div>
+      <FileDiagramFullscreenPreview
+        open={Boolean(fullscreenPreview)}
+        fileId={fullscreenPreview?.id ?? null}
+        fileName={fullscreenPreview?.name ?? ""}
+        onClose={() => setFullscreenPreview(null)}
+        onOpenToEdit={async () => {
+          const target = fullscreenPreview;
+          if (!target) return;
+          const opened = await onOpenFile(target);
+          if (opened) setFullscreenPreview(null);
+        }}
+      />
       <TextInputModal
         open={Boolean(renameTarget)}
         title="Rename diagram"

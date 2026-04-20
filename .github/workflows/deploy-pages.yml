@@ -34,8 +34,6 @@ jobs:
           # Project pages: https://<user>.github.io/<repo>/
           # User-site repo (<user>.github.io): set VITE_BASE_PATH: / in a repo Variable or fork this step.
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
-          # Optional: browser API key (restrict by HTTP referrer + Drive API) for anonymous #view= links.
-          VITE_GOOGLE_API_KEY: ${{ vars.VITE_GOOGLE_API_KEY }}
 
       - uses: actions/configure-pages@v5
 
