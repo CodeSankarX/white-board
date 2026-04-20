@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DiagramPreviewThumb } from "./DiagramPreviewThumb.jsx";
 import { listExcalidrawFiles, renameFile, trashFile } from "../driveService.js";
 
 function driveFileUrl(fileId) {
@@ -210,18 +211,20 @@ export function FileManager({
             >
               {displayedFiles.map((f) => (
                 <li key={f.id} className="file-manager__row">
-                  <div className="file-manager__name-block">
-                    <span className="file-manager__name" title={f.name}>
-                      {f.name}
-                      {f.id === activeFileId ? " (current)" : ""}
-                    </span>
-                    {f.modifiedTime ? (
-                      <span className="file-manager__meta">
-                        {formatModified(f.modifiedTime)}
+                  <DiagramPreviewThumb fileId={f.id} />
+                  <div className="file-manager__row-content">
+                    <div className="file-manager__name-block">
+                      <span className="file-manager__name" title={f.name}>
+                        {f.name}
+                        {f.id === activeFileId ? " (current)" : ""}
                       </span>
-                    ) : null}
-                  </div>
-                  <span className="file-manager__actions">
+                      {f.modifiedTime ? (
+                        <span className="file-manager__meta">
+                          {formatModified(f.modifiedTime)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <span className="file-manager__actions">
                     <button
                       type="button"
                       className="btn btn--sm btn--primary"
@@ -301,6 +304,7 @@ export function FileManager({
                       Delete
                     </button>
                   </span>
+                  </div>
                 </li>
               ))}
             </ul>
