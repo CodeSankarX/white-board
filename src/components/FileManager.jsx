@@ -1,17 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listExcalidrawFiles, renameFile, trashFile } from "../driveService.js";
 
+function driveFileUrl(fileId) {
+  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`;
+}
+
+function formatModified(iso) {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  } catch {
+    return "";
+  }
+}
+
 export function FileManager({
   open,
   onClose,
   folderId,
   activeFileId,
   onOpenFile,
+  onDuplicateFile,
 }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState("recent");
   const searchInputRef = useRef(null);
 
   const refresh = useCallback(async () => {
@@ -33,7 +53,10 @@ export function FileManager({
   }, [open, refresh]);
 
   useEffect(() => {
-    if (!open) setSearchQuery("");
+    if (!open) {
+      setSearchQuery("");
+      setSortBy("recent");
+    }
   }, [open]);
 
   useEffect(() => {
@@ -49,6 +72,16 @@ export function FileManager({
     if (!q) return files;
     return files.filter((f) => f.name.toLowerCase().includes(q));
   }, [files, searchQuery]);
+
+  const displayedFiles = useMemo(() => {
+    const list = [...filteredFiles];
+    if (sortBy === "name") {
+      list.sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+      );
+    }
+    return list;
+  }, [filteredFiles, sortBy]);
 
   if (!open) return null;
 
@@ -67,14 +100,39 @@ export function FileManager({
       >
         <div className="file-manager__header">
           <h2 id="file-manager-title">Your diagrams</h2>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            Close
-          </button>
+          <div className="file-manager__header-actions">
+            {!loading && files.length > 0 ? (
+              <>
+                <label className="file-manager__sort">
+                  <span className="gc-visually-hidden">Sort diagrams</span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    aria-label="Sort diagrams"
+                  >
+                    <option value="recent">Recent first</option>
+                    <option value="name">Name A–Z</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => refresh()}
+                  aria-label="Refresh list from Drive"
+                >
+                  Refresh
+                </button>
+              </>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              Close
+            </button>
+          </div>
         </div>
         {error && (
           <p className="file-manager__error" role="alert">
@@ -138,74 +196,107 @@ export function FileManager({
               className="file-manager__list"
               aria-label="Diagram files"
             >
-            {filteredFiles.map((f) => (
-              <li key={f.id} className="file-manager__row">
-                <span className="file-manager__name">
-                  {f.name}
-                  {f.id === activeFileId ? " (current)" : ""}
-                </span>
-                <span className="file-manager__actions">
-                  <button
-                    type="button"
-                    className="btn btn--sm btn--primary"
-                    onClick={() => onOpenFile(f)}
-                    aria-label={`Open ${f.name}`}
-                  >
-                    Open
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--sm btn--ghost"
-                    onClick={async () => {
-                      const next = window.prompt("Rename to", f.name);
-                      if (!next || next === f.name) return;
-                      try {
-                        await renameFile(f.id, next);
-                        await refresh();
-                      } catch (err) {
-                        window.alert(err?.message || String(err));
-                      }
-                    }}
-                    aria-label={`Rename ${f.name}`}
-                  >
-                    Rename
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--sm btn--danger"
-                    onClick={async () => {
-                      if (
-                        !window.confirm(
-                          `Move "${f.name}" to Drive trash? You can restore it from Google Drive.`,
-                        )
-                      ) {
-                        return;
-                      }
-                      try {
-                        await trashFile(f.id);
-                        await refresh();
-                        if (f.id === activeFileId) {
-                          window.alert(
-                            "The open file was deleted. Close this dialog and use Open or refresh the page.",
-                          );
+              {displayedFiles.map((f) => (
+                <li key={f.id} className="file-manager__row">
+                  <div className="file-manager__name-block">
+                    <span className="file-manager__name" title={f.name}>
+                      {f.name}
+                      {f.id === activeFileId ? " (current)" : ""}
+                    </span>
+                    {f.modifiedTime ? (
+                      <span className="file-manager__meta">
+                        {formatModified(f.modifiedTime)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className="file-manager__actions">
+                    <button
+                      type="button"
+                      className="btn btn--sm btn--primary"
+                      onClick={() => onOpenFile(f)}
+                      aria-label={`Open ${f.name}`}
+                    >
+                      Open
+                    </button>
+                    {onDuplicateFile ? (
+                      <button
+                        type="button"
+                        className="btn btn--sm btn--ghost"
+                        onClick={async () => {
+                          try {
+                            await onDuplicateFile(f);
+                            await refresh();
+                          } catch (err) {
+                            window.alert(err?.message || String(err));
+                          }
+                        }}
+                        aria-label={`Duplicate ${f.name}`}
+                      >
+                        Duplicate
+                      </button>
+                    ) : null}
+                    <a
+                      className="btn btn--sm btn--ghost file-manager__drive-link"
+                      href={driveFileUrl(f.id)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`Open ${f.name} in Google Drive`}
+                    >
+                      Drive
+                    </a>
+                    <button
+                      type="button"
+                      className="btn btn--sm btn--ghost"
+                      onClick={async () => {
+                        const next = window.prompt("Rename to", f.name);
+                        if (!next || next === f.name) return;
+                        try {
+                          await renameFile(f.id, next);
+                          await refresh();
+                        } catch (err) {
+                          window.alert(err?.message || String(err));
                         }
-                      } catch (err) {
-                        window.alert(err?.message || String(err));
-                      }
-                    }}
-                    aria-label={`Delete ${f.name}`}
-                  >
-                    Delete
-                  </button>
-                </span>
-              </li>
-            ))}
-          </ul>
-          {!loading && files.length > 0 && filteredFiles.length === 0 ? (
-            <p className="file-manager__empty" role="status">
-              {`No diagrams match "${searchQuery.trim()}".`}
-            </p>
-          ) : null}
+                      }}
+                      aria-label={`Rename ${f.name}`}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--sm btn--danger"
+                      onClick={async () => {
+                        if (
+                          !window.confirm(
+                            `Move "${f.name}" to Drive trash? You can restore it from Google Drive.`,
+                          )
+                        ) {
+                          return;
+                        }
+                        try {
+                          await trashFile(f.id);
+                          await refresh();
+                          if (f.id === activeFileId) {
+                            window.alert(
+                              "The open file was deleted. Close this dialog and use Open or refresh the page.",
+                            );
+                          }
+                        } catch (err) {
+                          window.alert(err?.message || String(err));
+                        }
+                      }}
+                      aria-label={`Delete ${f.name}`}
+                    >
+                      Delete
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {!loading && files.length > 0 && filteredFiles.length === 0 ? (
+              <p className="file-manager__empty" role="status">
+                {`No diagrams match "${searchQuery.trim()}".`}
+              </p>
+            ) : null}
           </>
         )}
         {!loading && files.length === 0 && !error && (

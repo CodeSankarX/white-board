@@ -10,6 +10,7 @@ export function Toolbar({
   onSave,
   onOpenFiles,
   onNewDiagram,
+  onShowShortcuts,
   savingDisabled,
 }) {
   const timeLabel =
@@ -88,6 +89,17 @@ export function Toolbar({
             >
               New
             </button>
+            {onShowShortcuts ? (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={onShowShortcuts}
+                aria-label="Keyboard shortcuts"
+                title="Keyboard shortcuts (Ctrl+Shift+/ or ⌘+Shift+/)"
+              >
+                ?
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn--muted"

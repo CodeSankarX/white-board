@@ -12,20 +12,40 @@ import {
   findAppFolderId,
   initDriveClient,
   listExcalidrawFiles,
+  renameFile,
   setDriveAccessToken,
   updateFileContent,
 } from "./driveService.js";
 import { FileManager } from "./components/FileManager.jsx";
+import { ShortcutsHelp } from "./components/ShortcutsHelp.jsx";
 import { Toolbar } from "./components/Toolbar.jsx";
 import { useAutoSave } from "./hooks/useAutoSave.js";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.js";
 
 const AUTOSAVE_MS = 30000;
 
 /** Avoid duplicate session restore in React StrictMode (dev). */
 let sessionRestoreAttempted = false;
 
+/** Resume this diagram after refresh when it still exists in Drive. */
+const LAST_DIAGRAM_ID_KEY = "excalidraw_drive_last_diagram_id";
+
 function emptySerialized() {
   return serializeAsJSON([], {}, {}, "local");
+}
+
+function pickResumedFile(files) {
+  if (!files?.length) return null;
+  try {
+    const id = sessionStorage.getItem(LAST_DIAGRAM_ID_KEY);
+    if (id) {
+      const hit = files.find((f) => f.id === id);
+      if (hit) return hit;
+    }
+  } catch {
+    /* ignore */
+  }
+  return files[0];
 }
 
 export default function App() {
@@ -38,6 +58,7 @@ export default function App() {
   const [activeFile, setActiveFile] = useState(null);
   const [initialScene, setInitialScene] = useState(null);
   const [fileManagerOpen, setFileManagerOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [toast, setToast] = useState(null);
 
   const getSerialized = useCallback(() => {
@@ -91,7 +112,7 @@ export default function App() {
         fileMeta = await createTextFile(folder, "Untitled.excalidraw", empty);
         content = empty;
       } else {
-        fileMeta = list[0];
+        fileMeta = pickResumedFile(list);
         content = await downloadFileText(fileMeta.id);
       }
       setActiveFile({ id: fileMeta.id, name: fileMeta.name });
@@ -117,6 +138,15 @@ export default function App() {
       setBooting(false);
     }
   }, [showToast]);
+
+  useEffect(() => {
+    if (!activeFile?.id) return;
+    try {
+      sessionStorage.setItem(LAST_DIAGRAM_ID_KEY, activeFile.id);
+    } catch {
+      /* ignore */
+    }
+  }, [activeFile?.id]);
 
   bootstrapSessionRef.current = bootstrapSession;
 
@@ -164,6 +194,11 @@ export default function App() {
 
   const handleSignOut = useCallback(() => {
     gisSignOut();
+    try {
+      sessionStorage.removeItem(LAST_DIAGRAM_ID_KEY);
+    } catch {
+      /* ignore */
+    }
     setSignedIn(false);
     setFolderId(null);
     setActiveFile(null);
@@ -257,6 +292,63 @@ export default function App() {
     }
   }, [saveNow, showToast]);
 
+  const handleRenameCurrent = useCallback(async () => {
+    if (!activeFile?.id) return;
+    const next = window.prompt("Rename diagram", activeFile.name);
+    if (!next?.trim()) return;
+    try {
+      const name = await renameFile(activeFile.id, next.trim());
+      setActiveFile((prev) => (prev ? { ...prev, name } : prev));
+      showToast(`Renamed to ${name}`);
+    } catch (e) {
+      showToast(e?.message || "Rename failed");
+    }
+  }, [activeFile, showToast]);
+
+  const handleDuplicateFile = useCallback(
+    async (f) => {
+      if (!folderId) return;
+      try {
+        const text = await downloadFileText(f.id);
+        const base = f.name.replace(/\.excalidraw$/i, "");
+        const newName = `Copy of ${base}.excalidraw`;
+        const meta = await createTextFile(folderId, newName, text);
+        showToast(`Created ${meta.name}`);
+      } catch (e) {
+        showToast(e?.message || "Duplicate failed");
+        throw e;
+      }
+    },
+    [folderId, showToast],
+  );
+
+  useKeyboardShortcuts(
+    () => ({
+      signedIn,
+      booting,
+      savingDisabled: !signedIn || !activeFile || booting,
+      fileManagerOpen,
+      shortcutsOpen,
+      hasFolder: Boolean(folderId),
+      hasActiveFile: Boolean(activeFile?.id),
+    }),
+    {
+      onSave: () => {
+        void handleManualSave();
+      },
+      onOpenFiles: () => setFileManagerOpen(true),
+      onNewDiagram: () => {
+        void handleNewDiagram();
+      },
+      onRenameCurrent: () => {
+        void handleRenameCurrent();
+      },
+      onCloseFileManager: () => setFileManagerOpen(false),
+      onOpenShortcuts: () => setShortcutsOpen(true),
+      onCloseShortcuts: () => setShortcutsOpen(false),
+    },
+  );
+
   return (
     <div className="app-root">
       <Toolbar
@@ -269,6 +361,9 @@ export default function App() {
         onSave={handleManualSave}
         onOpenFiles={() => setFileManagerOpen(true)}
         onNewDiagram={handleNewDiagram}
+        onShowShortcuts={
+          signedIn ? () => setShortcutsOpen(true) : undefined
+        }
         savingDisabled={!signedIn || !activeFile || booting}
       />
       <div className="app-canvas-wrap">
@@ -322,6 +417,11 @@ export default function App() {
         folderId={folderId}
         activeFileId={activeFile?.id}
         onOpenFile={handleOpenRemoteFile}
+        onDuplicateFile={signedIn ? handleDuplicateFile : undefined}
+      />
+      <ShortcutsHelp
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
       />
       <div className="app-toast" hidden={!toast} role="alert">
         {toast}

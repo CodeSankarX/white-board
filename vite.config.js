@@ -30,7 +30,13 @@ function productionCspPlugin() {
       "'unsafe-inline'",
       "https://fonts.googleapis.com",
     ].join(" "),
-    ["font-src", "'self'", "https://fonts.gstatic.com", "data:"].join(" "),
+    [
+      "font-src",
+      "'self'",
+      "https://fonts.gstatic.com",
+      "https://esm.sh",
+      "data:",
+    ].join(" "),
     ["img-src", "'self'", "data:", "blob:", "https:"].join(" "),
     [
       "connect-src",
@@ -66,7 +72,7 @@ function productionCspPlugin() {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   return {
-    plugins: [react(), productionCspPlugin()],
+    plugins: [react()],
     base: normalizeBase(env.VITE_BASE_PATH || "/"),
   };
 });
