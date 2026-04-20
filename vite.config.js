@@ -42,7 +42,11 @@ function productionCspPlugin() {
       "https://apis.google.com",
     ].join(" "),
     ["worker-src", "'self'", "blob:"].join(" "),
-    ["frame-src", "https://accounts.google.com"].join(" "),
+    [
+      "frame-src",
+      "https://accounts.google.com",
+      "https://content.googleapis.com",
+    ].join(" "),
     "upgrade-insecure-requests",
   ];
   const policy = directives.join("; ");
