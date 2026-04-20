@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <title>Gcalidraw</title>
+  <defs>
+    <linearGradient id="gcbg" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fb923c"/>
+      <stop offset="1" stop-color="#ea580c"/>
+    </linearGradient>
+  </defs>
+  <!-- 40×40 mark scaled to 384×384, centered in 512 -->
+  <g transform="translate(64 64) scale(9.6)">
+    <rect width="40" height="40" rx="10" fill="url(#gcbg)"/>
+    <path
+      d="M12 28c2-8 4-14 8-18m0 0c3 3 5 8 8 16M20 10v6"
+      stroke="#fffbeb"
+      stroke-width="2.2"
+      stroke-opacity="0.95"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>
